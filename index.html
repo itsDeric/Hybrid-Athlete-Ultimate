@@ -2212,14 +2212,19 @@ async function renderTrackers(){
       </div>
       <div class="card" style="margin-bottom:14px;">
         <h3>Exercise Log</h3>
-        <p class="muted" style="margin-top:2px;">Every exercise you've ever logged, across every program. Tap one to see its progression.</p>
+        <p class="muted" style="margin-top:2px;">Every exercise you've ever logged, across every program. Tap one to see its progression — solid line is weight, dashed is estimated 1-rep max.</p>
         <div id="exerciseChipRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
         <div style="position:relative;height:220px;margin-top:16px;"><canvas id="chartStrength"></canvas></div>
       </div>
       <div class="card" style="margin-bottom:14px;">
         <h3>Weekly Training Volume</h3>
-        <p class="muted" style="margin-top:2px;">Sessions logged per week via Session Mode.</p>
+        <p class="muted" style="margin-top:2px;">Total weight moved (kg) across completed working sets, per week.</p>
         <div style="position:relative;height:220px;margin-top:12px;"><canvas id="chartVolume"></canvas></div>
+      </div>
+      <div class="card" style="margin-bottom:14px;">
+        <h3>Muscle Group Balance</h3>
+        <p class="muted" style="margin-top:2px;">Training volume by muscle group over the last 7 days — spot what's being neglected.</p>
+        <div style="position:relative;height:240px;margin-top:12px;"><canvas id="chartMuscle"></canvas></div>
       </div>
       <div class="card">
         <h3>Body Measurements Trend</h3>
@@ -2423,26 +2428,49 @@ async function renderProgressCharts(wLog, bLog, pLog, retryCount){
       chipRow.innerHTML = names.map((n,i)=>`<button class="exercise-chip ${i===0?'active':''}" data-ex="${n}">${n}</button>`).join('');
       const drawStrengthChart = (chosen)=>{
         destroyChart('strength');
-        const points = [];
+        const weightPoints = {}, oneRMPoints = {};
         history.forEach(s=>{
           const match = s.exercises.find(e=>e.name===chosen && e.weight);
-          if(match) points.push({ date: s.date, weight: parseFloat(match.weight) });
+          if(match) weightPoints[s.date] = parseFloat(match.weight);
+          // Best estimated 1RM this session, from actual completed working sets (only available on entries logged since set types shipped)
+          if(match && match.sets){
+            let best = 0;
+            match.sets.forEach(set=>{
+              if(!set.done || set.type!=='working') return;
+              const oneRM = estimated1RM(set.weight, set.reps);
+              if(oneRM && oneRM > best) best = oneRM;
+            });
+            if(best) oneRMPoints[s.date] = Math.round(best*10)/10;
+          }
         });
-        pLog.filter(p=>p.ex===chosen).forEach(p=> points.push({ date: p.date, weight: parseFloat(p.w) }));
-        points.sort((a,b)=> a.date.localeCompare(b.date));
+        pLog.filter(p=>p.ex===chosen).forEach(p=>{
+          weightPoints[p.date] = parseFloat(p.w);
+          const oneRM = estimated1RM(p.w, p.r);
+          if(oneRM) oneRMPoints[p.date] = Math.max(oneRMPoints[p.date]||0, Math.round(oneRM*10)/10);
+        });
+        const dates = Array.from(new Set([...Object.keys(weightPoints), ...Object.keys(oneRMPoints)])).sort();
         const canvas = document.getElementById('chartStrength');
         if(!canvas) return;
-        if(!points.length){
+        if(!dates.length){
           canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
           return;
         }
+        const datasets = [{
+          label:'Weight', data: dates.map(d=> weightPoints[d]!==undefined ? weightPoints[d] : null),
+          borderColor: CHART_COLORS.ink, backgroundColor: 'rgba(17,17,20,.06)',
+          fill: true, tension: .25, pointRadius: 3, pointBackgroundColor: CHART_COLORS.ink, spanGaps:true,
+        }];
+        if(Object.keys(oneRMPoints).length){
+          datasets.push({
+            label:'Est. 1RM', data: dates.map(d=> oneRMPoints[d]!==undefined ? oneRMPoints[d] : null),
+            borderColor: CHART_COLORS.blue, backgroundColor: 'transparent', borderDash:[5,4],
+            fill:false, tension:.25, pointRadius:2.5, pointBackgroundColor: CHART_COLORS.blue, spanGaps:true,
+          });
+        }
         CHART_INSTANCES.strength = new Chart(canvas, {
           type: 'line',
-          data: { labels: points.map(p=>p.date), datasets: [{
-            data: points.map(p=>p.weight), borderColor: CHART_COLORS.ink, backgroundColor: 'rgba(17,17,20,.06)',
-            fill: true, tension: .25, pointRadius: 3, pointBackgroundColor: CHART_COLORS.ink,
-          }]},
-          options: baseChartOptions(),
+          data: { labels: dates, datasets },
+          options: baseChartOptions({ plugins:{ legend:{ display: datasets.length>1, position:'top', align:'end', labels:{boxWidth:10,font:{family:'Inter',size:11}} } } }),
         });
       };
       drawStrengthChart(names[0]);
@@ -2456,7 +2484,8 @@ async function renderProgressCharts(wLog, bLog, pLog, retryCount){
     }
   }
 
-  // 3. Weekly Training Volume — sessions logged per week, last 8 weeks
+  // 3. Weekly Training Volume — actual tonnage (kg) moved across completed working sets, last 8 weeks.
+  // Falls back to weight × completed-set-count for older entries logged before per-set reps existed.
   destroyChart('volume');
   const volCanvas = document.getElementById('chartVolume');
   if(volCanvas){
@@ -2469,13 +2498,70 @@ async function renderProgressCharts(wLog, bLog, pLog, retryCount){
         const week = Math.ceil((((d - jan1)/86400000) + jan1.getDay()+1)/7);
         return d.getFullYear()+'-W'+week;
       }
-      const counts = {};
-      history.forEach(s=>{ const wk = weekLabel(s.date); counts[wk] = (counts[wk]||0)+1; });
-      const weeks = Object.keys(counts).sort().slice(-8);
+      function sessionTonnage(s){
+        let total = 0;
+        (s.exercises||[]).forEach(e=>{
+          if(e.sets){
+            e.sets.forEach(set=>{
+              if(!set.done || set.type!=='working') return;
+              const w = parseFloat(set.weight);
+              if(w && set.reps) total += w * parseInt(set.reps);
+            });
+          } else if(e.weight && e.setsCompleted){
+            // legacy entry without per-set reps — approximate using weight × sets completed
+            total += parseFloat(e.weight) * e.setsCompleted;
+          }
+        });
+        return total;
+      }
+      const totals = {};
+      history.forEach(s=>{ const wk = weekLabel(s.date); totals[wk] = (totals[wk]||0) + sessionTonnage(s); });
+      const weeks = Object.keys(totals).sort().slice(-8);
       CHART_INSTANCES.volume = new Chart(volCanvas, {
         type: 'bar',
-        data: { labels: weeks, datasets: [{ data: weeks.map(w=>counts[w]), backgroundColor: CHART_COLORS.blue, borderRadius: 6, maxBarThickness: 36 }]},
+        data: { labels: weeks, datasets: [{ data: weeks.map(w=>Math.round(totals[w])), backgroundColor: CHART_COLORS.blue, borderRadius: 6, maxBarThickness: 36 }]},
         options: baseChartOptions({ scales: { x:{ grid:{display:false}, ticks:{font:{family:'Inter',size:10},color:CHART_COLORS.gray} }, y:{ grid:{color:'#eeeef1'}, ticks:{precision:0, font:{family:'IBM Plex Mono',size:10},color:CHART_COLORS.gray} } } }),
+      });
+    }
+  }
+
+  // 3b. Muscle Group Balance — volume by category over the last 7 days, using the exercise library's
+  // category groupings to spot what's being neglected week to week.
+  destroyChart('muscle');
+  const muscleCanvas = document.getElementById('chartMuscle');
+  if(muscleCanvas){
+    const nameToCategory = {};
+    Object.keys(EXERCISE_LIBRARY).forEach(cat=> EXERCISE_LIBRARY[cat].forEach(n=> nameToCategory[n]=cat));
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-7);
+    const cutoffStr = cutoff.toISOString().slice(0,10);
+    const catTotals = {};
+    history.filter(s=> s.date >= cutoffStr).forEach(s=>{
+      (s.exercises||[]).forEach(e=>{
+        const cat = nameToCategory[e.name] || 'Other';
+        let vol = 0;
+        if(e.sets){
+          e.sets.forEach(set=>{
+            if(!set.done || set.type!=='working') return;
+            const w = parseFloat(set.weight);
+            if(w && set.reps) vol += w * parseInt(set.reps);
+          });
+        } else if(e.weight && e.setsCompleted){
+          vol = parseFloat(e.weight) * e.setsCompleted;
+        }
+        if(vol) catTotals[cat] = (catTotals[cat]||0) + vol;
+      });
+    });
+    const cats = Object.keys(catTotals).sort((a,b)=> catTotals[b]-catTotals[a]);
+    if(!cats.length){
+      muscleCanvas.parentElement.innerHTML = `<p class="muted" style="padding-top:100px;text-align:center;">Finish a session in the last 7 days to see your muscle group split here.</p>`;
+    } else {
+      CHART_INSTANCES.muscle = new Chart(muscleCanvas, {
+        type: 'bar',
+        data: { labels: cats, datasets: [{ data: cats.map(c=>Math.round(catTotals[c])), backgroundColor: CHART_COLORS.green, borderRadius: 6, maxBarThickness: 30 }]},
+        options: baseChartOptions({
+          indexAxis: 'y',
+          scales: { x:{ grid:{color:'#eeeef1'}, ticks:{precision:0, font:{family:'IBM Plex Mono',size:10},color:CHART_COLORS.gray} }, y:{ grid:{display:false}, ticks:{font:{family:'Inter',size:11},color:CHART_COLORS.ink} } }
+        }),
       });
     }
   }
