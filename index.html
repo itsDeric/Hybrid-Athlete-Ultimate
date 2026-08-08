@@ -13,7 +13,21 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Hybrid Athlete — Training System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
+<script>
+  // Chart.js from cdnjs, with a jsDelivr fallback if the primary CDN is blocked or unreachable —
+  // previously a single pinned CDN URL with no fallback meant charts could stay silently blank forever.
+  (function(){
+    function loadFallback(){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+      document.head.appendChild(s);
+    }
+    var primary = document.createElement('script');
+    primary.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+    primary.onerror = loadFallback;
+    document.head.appendChild(primary);
+  })();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -2199,8 +2213,21 @@ function baseChartOptions(extra){
   }, extra||{});
 }
 
-async function renderProgressCharts(wLog, bLog, pLog){
-  if(typeof Chart === 'undefined'){ setTimeout(()=>renderProgressCharts(wLog,bLog,pLog), 300); return; }
+async function renderProgressCharts(wLog, bLog, pLog, retryCount){
+  retryCount = retryCount || 0;
+  if(typeof Chart === 'undefined'){
+    // Give the CDN (and its fallback) time to load, but don't retry forever — after ~9s, tell the
+    // user instead of leaving every chart card silently blank with no explanation.
+    if(retryCount >= 30){
+      ['chartWeight','chartStrength','chartVolume','chartBody'].forEach(id=>{
+        const c = document.getElementById(id);
+        if(c && c.parentElement) c.parentElement.innerHTML = `<p class="muted" style="padding-top:80px;text-align:center;">Charts failed to load — check your internet connection and refresh the page.</p>`;
+      });
+      return;
+    }
+    setTimeout(()=>renderProgressCharts(wLog,bLog,pLog,retryCount+1), 300);
+    return;
+  }
   const history = await getJSON('session-history', []);
 
   // 1. Weight Trend
