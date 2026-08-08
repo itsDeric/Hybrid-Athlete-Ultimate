@@ -1712,6 +1712,9 @@ async function finishSessionMode(){
     await setJSON(key, state);
   }
 
+  // Keep the Gym Dashboard on the day you just trained instead of snapping back to the first day of the week
+  GYM_STATE.activeDay = sourceInfo.day;
+
   closeSessionMode();
   renderGym();
   renderCheat();
@@ -2217,11 +2220,24 @@ async function renderProgressCharts(wLog, bLog, pLog){
 
   // 2. Exercise Log — every exercise ever logged, across every program, click to see its chart
   const exerciseNames = new Set();
-  history.forEach(s => s.exercises.forEach(e=>{ if(e.weight) exerciseNames.add(e.name); }));
-  pLog.forEach(p => exerciseNames.add(p.ex));
+  const lastLoggedDate = {}; // name -> most recent date it was logged, so the newest exercise appears first
+  history.forEach(s => s.exercises.forEach(e=>{
+    if(e.weight){
+      exerciseNames.add(e.name);
+      if(!lastLoggedDate[e.name] || s.date > lastLoggedDate[e.name]) lastLoggedDate[e.name] = s.date;
+    }
+  }));
+  pLog.forEach(p => {
+    exerciseNames.add(p.ex);
+    if(!lastLoggedDate[p.ex] || p.date > lastLoggedDate[p.ex]) lastLoggedDate[p.ex] = p.date;
+  });
   const chipRow = document.getElementById('exerciseChipRow');
   if(chipRow){
-    const names = Array.from(exerciseNames).sort();
+    // Most recently logged exercise first, so finishing a session surfaces it immediately — ties broken alphabetically
+    const names = Array.from(exerciseNames).sort((a,b)=>{
+      const d = (lastLoggedDate[b]||'').localeCompare(lastLoggedDate[a]||'');
+      return d !== 0 ? d : a.localeCompare(b);
+    });
     if(!names.length){
       chipRow.innerHTML = `<p class="muted">No exercises logged yet — finish a session or add a PR to see them here.</p>`;
       destroyChart('strength');
