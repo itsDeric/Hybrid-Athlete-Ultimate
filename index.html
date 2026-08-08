@@ -334,6 +334,16 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .set-input::placeholder{color:rgba(255,255,255,.3);}
 .set-x{color:var(--gray-400);font-size:12.5px;flex-shrink:0;}
 .session-rest{position:fixed;inset:0;background:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:1150;}
+/* PR Toast */
+.pr-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-20px);opacity:0;background:var(--black);color:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 12px 32px rgba(0,0,0,.3);z-index:1300;transition:opacity .3s ease,transform .3s ease;max-width:90vw;width:340px;}
+.pr-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+.pr-toast-head{font-weight:800;font-size:15px;margin-bottom:10px;}
+.pr-toast-row{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid rgba(255,255,255,.1);}
+.pr-toast-row:first-of-type{border-top:none;}
+.pr-toast-ex{font-weight:700;font-size:13.5px;}
+.pr-toast-type{font-size:11px;color:var(--amber);text-transform:uppercase;letter-spacing:.04em;font-weight:700;}
+.pr-toast-val{font-family:var(--mono);font-size:13.5px;}
+.pr-toast-prev{color:var(--gray-400);font-size:11.5px;}
 .rest-time{font-family:var(--mono);font-size:64px;font-weight:700;color:#fff;letter-spacing:-.02em;}
 .rest-label{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.7);font-weight:700;}
 .rest-actions{display:flex;gap:10px;}
@@ -1704,6 +1714,73 @@ async function finishSessionMode(){
     if(repWeights[i]) await setExerciseWeight(exercises[i].name, repWeights[i]);
   }
 
+  // --- Auto PR detection ---
+  // Compares this session's completed working sets against everything logged before it (session
+  // history + any manually-added PRs) and flags new bests, so PRs surface automatically instead of
+  // requiring a separate manual entry every time.
+  function estimated1RM(weight, reps){
+    const w = parseFloat(weight), r = parseInt(reps);
+    if(!w || !r || r < 1) return null;
+    return w * (1 + r/30); // Epley formula
+  }
+  const priorHistory = await getJSON('session-history', []);
+  const priorPRs = await getJSON('pr-log', []);
+  function baselineFor(name){
+    let maxWeight = 0, max1RM = 0, maxSessionVolume = 0;
+    priorHistory.forEach(s=>{
+      let sessionVolume = 0;
+      (s.exercises||[]).forEach(e=>{
+        if(e.name !== name) return;
+        (e.sets||[]).forEach(set=>{
+          if(!set.done || set.type!=='working') return;
+          const w = parseFloat(set.weight);
+          if(w && w > maxWeight) maxWeight = w;
+          const oneRM = estimated1RM(set.weight, set.reps);
+          if(oneRM && oneRM > max1RM) max1RM = oneRM;
+          if(w && set.reps) sessionVolume += w * parseInt(set.reps);
+        });
+      });
+      if(sessionVolume > maxSessionVolume) maxSessionVolume = sessionVolume;
+    });
+    priorPRs.forEach(p=>{
+      if(p.ex !== name) return;
+      const w = parseFloat(p.w);
+      if(w && w > maxWeight) maxWeight = w;
+      const oneRM = estimated1RM(p.w, p.r);
+      if(oneRM && oneRM > max1RM) max1RM = oneRM;
+    });
+    return { maxWeight, max1RM, maxSessionVolume };
+  }
+  const newPRs = [];
+  exercises.forEach((e,i)=>{
+    const doneWorking = setData[i].filter(s=>s.done && s.type==='working' && s.weight);
+    if(!doneWorking.length) return;
+    const baseline = baselineFor(e.name);
+    let sessionVolume = 0;
+    let bestWeightSet = null, bestOneRM = 0, bestOneRMSet = null;
+    doneWorking.forEach(s=>{
+      const w = parseFloat(s.weight);
+      if(w && (!bestWeightSet || w > parseFloat(bestWeightSet.weight))) bestWeightSet = s;
+      const oneRM = estimated1RM(s.weight, s.reps);
+      if(oneRM && oneRM > bestOneRM){ bestOneRM = oneRM; bestOneRMSet = s; }
+      if(w && s.reps) sessionVolume += w * parseInt(s.reps);
+    });
+    if(bestWeightSet && parseFloat(bestWeightSet.weight) > baseline.maxWeight){
+      newPRs.push({ ex:e.name, type:'Weight PR', w:bestWeightSet.weight, r:bestWeightSet.reps||'', prev:baseline.maxWeight||null });
+    }
+    if(bestOneRMSet && bestOneRM > baseline.max1RM && (!bestWeightSet || bestOneRMSet !== bestWeightSet)){
+      newPRs.push({ ex:e.name, type:'Est. 1RM PR', w:bestOneRMSet.weight, r:bestOneRMSet.reps||'', prev: baseline.max1RM ? Math.round(baseline.max1RM*10)/10 : null });
+    }
+    if(sessionVolume > baseline.maxSessionVolume && baseline.maxSessionVolume > 0){
+      newPRs.push({ ex:e.name, type:'Volume PR', w:Math.round(sessionVolume), r:'', prev:Math.round(baseline.maxSessionVolume) });
+    }
+  });
+  if(newPRs.length){
+    const prLog = await getJSON('pr-log', []);
+    newPRs.forEach(p=> prLog.push({ date: todayKey(), ex:p.ex, w:p.w, r:p.r, type:p.type, auto:true }));
+    await setJSON('pr-log', prLog);
+  }
+
   // Log this session permanently — this is what powers the progress charts
   const history = await getJSON('session-history', []);
   history.push({
@@ -1738,6 +1815,27 @@ async function finishSessionMode(){
   renderCheat();
   renderHabits();
   renderTrackers();
+  if(newPRs.length) showPRToast(newPRs);
+}
+
+function showPRToast(prs){
+  const toast = document.createElement('div');
+  toast.className = 'pr-toast';
+  toast.innerHTML = `
+    <div class="pr-toast-head">🎉 New Personal Record${prs.length>1?'s':''}!</div>
+    ${prs.map(p=>`
+      <div class="pr-toast-row">
+        <span class="pr-toast-ex">${p.ex}</span>
+        <span class="pr-toast-type">${p.type}</span>
+        <span class="pr-toast-val">${p.w}${p.type==='Volume PR'?' kg total':p.r?' kg × '+p.r:' kg'}${p.prev?` <span class="pr-toast-prev">(was ${p.type==='Volume PR'?p.prev+' kg':p.prev+' kg'})</span>`:''}</span>
+      </div>`).join('')}
+  `;
+  document.body.appendChild(toast);
+  requestAnimationFrame(()=> toast.classList.add('show'));
+  setTimeout(()=>{
+    toast.classList.remove('show');
+    setTimeout(()=> toast.remove(), 400);
+  }, 5000 + prs.length*1200);
 }
 
 function closeSessionMode(){
@@ -2110,7 +2208,8 @@ async function renderTrackers(){
         <div class="field"><label>Reps</label><input id="pR" type="number" style="width:70px;"></div>
         <button class="btn" id="pAdd">Add PR</button>
       </div>
-      <table><thead><tr><th>Date</th><th>Exercise</th><th class="num">Weight</th><th class="num">Reps</th></tr></thead><tbody id="pBody"></tbody></table>
+      <table><thead><tr><th>Date</th><th>Exercise</th><th>Type</th><th class="num">Weight</th><th class="num">Reps</th></tr></thead><tbody id="pBody"></tbody></table>
+      <p class="muted" style="margin-top:10px;font-size:12px;">Rows marked <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);">AUTO</span> were detected automatically when you beat a previous best in Session Mode.</p>
     </div></div>
     <div class="pane" data-pane="pace"><div class="card">
       <div class="form-row">
@@ -2167,7 +2266,7 @@ async function renderTrackers(){
   // PR
   let pLog = await getJSON('pr-log', []);
   function paintP(){
-    document.getElementById('pBody').innerHTML = pLog.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.ex}</td><td class="num">${r.w} kg</td><td class="num">${r.r}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No entries yet</td></tr>`;
+    document.getElementById('pBody').innerHTML = pLog.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.ex}</td><td>${r.type||'—'}${r.auto?' <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);font-size:9.5px;">AUTO</span>':''}</td><td class="num">${r.w} kg</td><td class="num">${r.r||'—'}</td></tr>`).join('') || `<tr><td colspan="5" class="muted">No entries yet</td></tr>`;
   }
   paintP();
   document.getElementById('pAdd').addEventListener('click', async ()=>{
