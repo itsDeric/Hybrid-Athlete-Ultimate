@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Hybrid Athlete — Training System</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js" defer></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -31,6 +32,7 @@
   --green:#1fb15a;
   --amber:#c98a12;
   --red:#e0352b;
+  --purple:#8b6fe0;
   --radius:16px;
   --radius-sm:10px;
   --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06);
@@ -163,6 +165,9 @@ td.num,th.num{font-family:var(--mono);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
 
+.exercise-chip{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:99px;border:1px solid var(--gray-200);background:#fff;cursor:pointer;color:var(--gray-600);}
+.exercise-chip.active{background:var(--black);color:#fff;border-color:var(--black);}
+
 /* week planner */
 .day-card{padding:16px;min-height:150px;display:flex;flex-direction:column;gap:8px;cursor:pointer;transition:transform .15s, box-shadow .15s;}
 .day-card:hover{transform:translateY(-2px);box-shadow:0 10px 24px rgba(0,0,0,.08);}
@@ -294,17 +299,26 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .session-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:6px;}
 .session-exname{font-size:28px;font-weight:800;letter-spacing:-.02em;max-width:90%;}
 .session-target{font-size:14px;color:var(--gray-400);font-family:var(--mono);}
-.session-sets{display:flex;flex-direction:column;gap:8px;width:100%;max-width:360px;margin-top:22px;}
-.session-set-row{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px 16px;}
-.session-set-row.done{background:rgba(31,177,90,.15);border-color:var(--green);}
-.set-label{font-weight:700;font-size:14px;}
-.set-check{width:30px;height:30px;border-radius:50%;border:2px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
-.set-check svg{width:15px;height:15px;color:#fff;opacity:0;}
+.session-hint{font-size:11.5px;color:var(--gray-400);margin-top:6px;max-width:300px;}
+.session-sets{display:flex;flex-direction:column;gap:8px;width:100%;max-width:360px;margin-top:18px;}
+.session-set-row{display:flex;flex-direction:column;gap:9px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:11px 14px;}
+.session-set-row.done{background:rgba(31,177,90,.13);border-color:var(--green);}
+.set-row-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.set-label{font-weight:700;font-size:13.5px;flex-shrink:0;}
+.set-type-badge{border:none;border-radius:20px;padding:5px 11px;font-size:10.5px;font-weight:800;letter-spacing:.03em;cursor:pointer;text-transform:uppercase;font-family:var(--sans);white-space:nowrap;}
+.set-type-badge::after{content:' ▾';opacity:.6;font-size:9px;}
+.set-type-badge.type-working{background:rgba(10,108,255,.2);color:#8fbaff;}
+.set-type-badge.type-warmup{background:rgba(201,138,18,.22);color:#f0b84a;}
+.set-type-badge.type-drop{background:rgba(139,111,224,.22);color:#c1adf5;}
+.set-type-badge.type-failure{background:rgba(224,53,43,.22);color:#ff9089;}
+.set-check{width:28px;height:28px;border-radius:50%;border:2px solid rgba(255,255,255,.25);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
+.set-check svg{width:14px;height:14px;color:#fff;opacity:0;}
 .session-set-row.done .set-check{background:var(--green);border-color:var(--green);}
 .session-set-row.done .set-check svg{opacity:1;}
-.session-weight-row{margin-top:22px;display:flex;flex-direction:column;align-items:center;gap:6px;}
-.session-weight-row label{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--gray-400);font-weight:700;}
-.session-weight-row input{width:120px;text-align:center;font-family:var(--mono);font-size:20px;font-weight:600;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:10px;color:#fff;padding:8px;}
+.set-row-inputs{display:flex;align-items:center;gap:8px;}
+.set-input{flex:1;min-width:0;text-align:center;font-family:var(--mono);font-size:15px;font-weight:600;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#fff;padding:7px 4px;}
+.set-input::placeholder{color:rgba(255,255,255,.3);}
+.set-x{color:var(--gray-400);font-size:12.5px;flex-shrink:0;}
 .session-rest{position:fixed;inset:0;background:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:1150;}
 .rest-time{font-family:var(--mono);font-size:64px;font-weight:700;color:#fff;letter-spacing:-.02em;}
 .rest-label{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:rgba(255,255,255,.7);font-weight:700;}
@@ -573,6 +587,66 @@ async function setJSON(key, value){
 function todayKey(){ return new Date().toISOString().slice(0,10); }
 
 /* ============================================================
+   SHARED EXERCISE WEIGHT STORE
+   One working weight per exercise name, shared across every
+   program and every day it appears in — editing it anywhere
+   (Program Builder, Gym Dashboard, Session Mode) updates it
+   everywhere else that exercise shows up.
+============================================================ */
+async function getExerciseWeight(name){
+  const weights = await getJSON('exercise-weights', {});
+  return weights[name] || '';
+}
+async function setExerciseWeight(name, value){
+  const weights = await getJSON('exercise-weights', {});
+  weights[name] = value;
+  await setJSON('exercise-weights', weights);
+}
+async function getAllExerciseWeights(){
+  return await getJSON('exercise-weights', {});
+}
+
+async function migrateToSharedExerciseWeights(){
+  const migrated = await getJSON('exercise-weights-migrated', false);
+  if(migrated) return;
+  const weights = await getJSON('exercise-weights', {});
+  const candidates = {}; // name -> { value, date } — date '' sorts before any real date
+
+  // Baseline from old Hybrid Athlete per-day storage (key format "Day::Exercise_Name")
+  const gw = await getJSON('gym-weights', {});
+  Object.keys(gw).forEach(k=>{
+    const name = k.split('::')[1].replace(/_/g,' ');
+    if(gw[k] && !candidates[name]) candidates[name] = { value: gw[k], date: '' };
+  });
+
+  // Baseline from custom programs' per-exercise load fields
+  const progs = await getJSON('custom-programs', []);
+  progs.forEach(p=>{
+    Object.values(p.days||{}).forEach(d=>{
+      (d.exercises||[]).forEach(e=>{
+        if(e.load && !candidates[e.name]) candidates[e.name] = { value: e.load, date: '' };
+      });
+    });
+  });
+
+  // Session history has real dates — most recent logged value wins over baselines
+  const history = await getJSON('session-history', []);
+  history.forEach(s=>{
+    (s.exercises||[]).forEach(e=>{
+      if(e.weight && (!candidates[e.name] || s.date > candidates[e.name].date)){
+        candidates[e.name] = { value: e.weight, date: s.date };
+      }
+    });
+  });
+
+  Object.keys(candidates).forEach(name=>{
+    if(!(name in weights)) weights[name] = candidates[name].value;
+  });
+  await setJSON('exercise-weights', weights);
+  await setJSON('exercise-weights-migrated', true);
+}
+
+/* ============================================================
    BACKUP & RESTORE — free, local file export/import.
    No account, no sign-in, works for anyone immediately.
 ============================================================ */
@@ -752,7 +826,7 @@ async function renderOverview(){
     rhythmHTML = `
       <div><div class="stat-label">Gym Sessions</div><div class="stat-value">4</div></div>
       <div><div class="stat-label">Running Sessions</div><div class="stat-value">3</div></div>
-      <div><div class="stat-label">Full Rest</div><div class="stat-value">1</div></div>
+      <div><div class="stat-label">Full Rest</div><div class="stat-value">0</div></div>
       <div><div class="stat-label">Focus</div><div class="stat-value" style="font-size:14px;font-weight:700;">Growth + Endurance</div></div>`;
     headTitle = 'Hybrid Athlete';
     headSub = `Currently following the built-in <b>Hybrid Athlete</b> program. Switch programs any time from the list below.`;
@@ -760,6 +834,7 @@ async function renderOverview(){
 
   // What's Today — built once, used by the card below
   const todayName = new Date().toLocaleDateString('en-US',{weekday:'long'});
+  const todayWeights = await getAllExerciseWeights();
   let todayHTML, todayIsRest = false, todayJumpHandler;
   if(activeProg){
     const dayData = activeProg.days[todayName] || {type:'rest', exercises:[]};
@@ -768,7 +843,7 @@ async function renderOverview(){
       todayHTML = `<p class="muted" style="margin-top:6px;">Full rest day. No session scheduled.</p>`;
       todayJumpHandler = null;
     } else {
-      todayHTML = `<div class="check-list" style="margin-top:8px;">${dayData.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${e.name} — ${e.sets}×${e.reps}${e.load?' @ '+e.load:''}</span></div>`).join('')}${dayData.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${dayData.exercises.length-5} more…</span></div>`:''}</div>`;
+      todayHTML = `<div class="check-list" style="margin-top:8px;">${dayData.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${e.name} — ${e.sets}×${e.reps}${todayWeights[e.name]?' @ '+todayWeights[e.name]+'kg':''}</span></div>`).join('')}${dayData.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${dayData.exercises.length-5} more…</span></div>`:''}</div>`;
       todayJumpHandler = ()=>{
         GYM_STATE.activeDay = todayName;
         showView('gym');
@@ -778,7 +853,7 @@ async function renderOverview(){
     const plan = WEEK_PLAN.find(d=>d.day===todayName);
     if(plan && (plan.type==='gym' || plan.type==='both') && GYM[todayName]){
       const gymDay = GYM[todayName];
-      todayHTML = `<div class="check-list" style="margin-top:8px;">${gymDay.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${e[0]} — ${e[1]}×${e[2]}</span></div>`).join('')}${gymDay.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${gymDay.exercises.length-5} more…</span></div>`:''}</div>`;
+      todayHTML = `<div class="check-list" style="margin-top:8px;">${gymDay.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${e[0]} — ${e[1]}×${e[2]}${todayWeights[e[0]]?' @ '+todayWeights[e[0]]+'kg':''}</span></div>`).join('')}${gymDay.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${gymDay.exercises.length-5} more…</span></div>`:''}</div>`;
       todayJumpHandler = ()=>{
         GYM_STATE.activeDay = todayName;
         showView('gym');
@@ -1064,7 +1139,7 @@ async function renderPrograms(){
   }
 }
 
-function renderProgramEditor(el, programs){
+async function renderProgramEditor(el, programs){
   const isNew = PB_STATE.editingId === '__new__';
   const prog = isNew ? blankProgram('') : programs.find(p=>p.id===PB_STATE.editingId);
   if(!prog){ PB_STATE.editingId=null; return renderPrograms(); }
@@ -1072,6 +1147,7 @@ function renderProgramEditor(el, programs){
   const dayData = prog.days[day];
 
   const categoryOptions = Object.keys(EXERCISE_LIBRARY).map(c=>`<option value="${c}">${c}</option>`).join('');
+  const sharedWeights = await getAllExerciseWeights();
 
   el.innerHTML = `
     <div class="page-head">
@@ -1101,7 +1177,7 @@ function renderProgramEditor(el, programs){
               <td>${e.name}</td>
               <td class="num"><input type="text" data-field="sets" data-i="${i}" value="${e.sets}" style="width:50px;text-align:right;"></td>
               <td class="num"><input type="text" data-field="reps" data-i="${i}" value="${e.reps}" style="width:60px;text-align:right;"></td>
-              <td class="num"><input type="text" data-field="load" data-i="${i}" value="${e.load||''}" placeholder="kg" style="width:60px;text-align:right;"></td>
+              <td class="num"><input type="text" data-field="load" data-i="${i}" value="${sharedWeights[e.name]||''}" placeholder="kg" style="width:60px;text-align:right;"></td>
               <td class="num"><button class="btn ghost" data-removeex="${i}" style="padding:5px 9px;">${ICONS.trash}</button></td>
             </tr>`).join('') || `<tr><td colspan="5" class="muted">No exercises added yet — pull one in below.</td></tr>`}
           </tbody>
@@ -1159,7 +1235,11 @@ function renderProgramEditor(el, programs){
   el.querySelectorAll('#pbExTable input[data-field]').forEach(inp=>{
     inp.addEventListener('change', ()=>{
       const i = parseInt(inp.dataset.i);
-      dayData.exercises[i][inp.dataset.field] = inp.value;
+      if(inp.dataset.field === 'load'){
+        setExerciseWeight(dayData.exercises[i].name, inp.value);
+      } else {
+        dayData.exercises[i][inp.dataset.field] = inp.value;
+      }
     });
   });
 
@@ -1208,7 +1288,7 @@ async function renderWeek(){
     <div class="page-head">
       <div class="eyebrow">This Week</div>
       <div class="page-title">Weekly Planner</div>
-      <div class="page-sub">${activeProg ? `Showing your active program — <b>${activeProg.name}</b>. Tap a day to edit it.` : '4 gym sessions, 3 running sessions, 1 full rest day. Tap a day to jump to its full session.'}</div>
+      <div class="page-sub">${activeProg ? `Showing your active program — <b>${activeProg.name}</b>. Tap a day to edit it.` : '4 gym sessions, 3 running sessions, spread across all 7 days. Tap a day to jump to its full session.'}</div>
     </div>
     <div class="grid g7" id="weekGrid"></div>
     ${pulseLine()}
@@ -1275,7 +1355,7 @@ async function renderGym(){
 
 async function renderBuiltinGym(el){
   const days = Object.keys(GYM);
-  const weights = await getJSON('gym-weights', {});
+  const weights = await getAllExerciseWeights();
   const startDay = (GYM_STATE.activeDay && days.includes(GYM_STATE.activeDay)) ? GYM_STATE.activeDay : days[0];
   GYM_STATE.activeDay = null;
   el.innerHTML = `
@@ -1304,7 +1384,6 @@ async function renderBuiltinGym(el){
     </div>
   `;
   const panes = document.getElementById('gymPanes');
-  function slug(day, name){ return day+'::'+name.replace(/\s+/g,'_'); }
   panes.innerHTML = days.map((d)=>`
     <div class="pane ${d===startDay?'active':''}" data-pane="${d}">
       <div class="card">
@@ -1312,21 +1391,16 @@ async function renderBuiltinGym(el){
         <table style="margin-top:10px;">
           <thead><tr><th>Exercise</th><th class="num">Sets</th><th class="num">Reps</th><th class="num">Working Weight</th></tr></thead>
           <tbody>${GYM[d].exercises.map(e=>{
-            const key = slug(d, e[0]);
-            const val = weights[key] || '';
+            const val = weights[e[0]] || '';
             return `<tr><td>${e[0]}</td><td class="num">${e[1]}</td><td class="num">${e[2]}</td>
-              <td class="num"><input type="number" step="0.5" placeholder="kg" data-wkey="${key}" value="${val}" style="width:72px;text-align:right;"></td></tr>`;
+              <td class="num"><input type="number" step="0.5" placeholder="kg" data-exname="${e[0]}" value="${val}" style="width:72px;text-align:right;"></td></tr>`;
           }).join('')}</tbody>
         </table>
         ${GYM[d].cut && GYM[d].cut.length ? `<p class="muted" style="margin-top:12px;line-height:1.6;"><b>Skip by default —</b> add only if the session feels short and you have extra time: ${GYM[d].cut.map(c=>c.split(' — ')[0]).join(', ')}.</p>` : ''}
       </div>
     </div>`).join('');
-  panes.querySelectorAll('input[data-wkey]').forEach(inp=>{
-    inp.addEventListener('input', async ()=>{
-      const w = await getJSON('gym-weights', {});
-      w[inp.dataset.wkey] = inp.value;
-      await setJSON('gym-weights', w);
-    });
+  panes.querySelectorAll('input[data-exname]').forEach(inp=>{
+    inp.addEventListener('input', ()=> setExerciseWeight(inp.dataset.exname, inp.value));
   });
   document.getElementById('gymTabs').querySelectorAll('.subtab').forEach(t=>{
     t.addEventListener('click',()=>{
@@ -1357,12 +1431,13 @@ async function renderProgramSession(el, prog){
   }
   const startDay = (GYM_STATE.activeDay && trainDays.includes(GYM_STATE.activeDay)) ? GYM_STATE.activeDay : trainDays[0];
   GYM_STATE.activeDay = null;
+  const weights = await getAllExerciseWeights();
   el.innerHTML = `
     <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;">
       <div>
         <div class="eyebrow">${trainDays.length}× Weekly — ${prog.tag}</div>
         <div class="page-title">${prog.name}</div>
-        <div class="page-sub">Log your working weight for each exercise as you train. Edits save automatically.</div>
+        <div class="page-sub">Log your working weight for each exercise as you train. Edits save automatically and sync to this exercise everywhere it appears.</div>
       </div>
       <button class="start-session-btn" id="startSessionBtn">${ICONS.run} Start Session</button>
     </div>
@@ -1383,18 +1458,12 @@ async function renderProgramSession(el, prog){
           <thead><tr><th>Exercise</th><th class="num">Sets</th><th class="num">Reps</th><th class="num">Working Weight</th></tr></thead>
           <tbody>${prog.days[d].exercises.map((e,i)=>`
             <tr><td>${e.name}</td><td class="num">${e.sets}</td><td class="num">${e.reps}</td>
-              <td class="num"><input type="text" placeholder="kg" data-day="${d}" data-i="${i}" value="${e.load||''}" style="width:72px;text-align:right;"></td></tr>`).join('')}</tbody>
+              <td class="num"><input type="text" placeholder="kg" data-exname="${e.name}" value="${weights[e.name]||''}" style="width:72px;text-align:right;"></td></tr>`).join('')}</tbody>
         </table>
       </div>
     </div>`).join('');
-  panes.querySelectorAll('input[data-day]').forEach(inp=>{
-    inp.addEventListener('input', async ()=>{
-      const arr = await getJSON('custom-programs', []);
-      const p = arr.find(x=>x.id===prog.id);
-      if(!p) return;
-      p.days[inp.dataset.day].exercises[parseInt(inp.dataset.i)].load = inp.value;
-      await setJSON('custom-programs', arr);
-    });
+  panes.querySelectorAll('input[data-exname]').forEach(inp=>{
+    inp.addEventListener('input', ()=> setExerciseWeight(inp.dataset.exname, inp.value));
   });
   document.getElementById('gymTabs').querySelectorAll('.subtab').forEach(t=>{
     t.addEventListener('click',()=>{
@@ -1430,30 +1499,40 @@ function inferRestSeconds(repsVal){
   return 60;                    // higher-rep / isolation work — shorter rest
 }
 
+// Set types — tap a set's badge in Session Mode to cycle through these
+const SET_TYPE_ORDER = ['working','warmup','drop','failure'];
+const SET_TYPE_META = {
+  working: { label:'Working', class:'type-working' },
+  warmup:  { label:'Warm-up', class:'type-warmup' },
+  drop:    { label:'Drop Set', class:'type-drop' },
+  failure: { label:'Failure', class:'type-failure' },
+};
+function nextSetType(t){
+  const i = SET_TYPE_ORDER.indexOf(t);
+  return SET_TYPE_ORDER[(i+1) % SET_TYPE_ORDER.length];
+}
+// Warm-up and drop sets use short fixed rest regardless of rep range; working/failure use the smart inference
+function restSecondsForSet(type, repsVal){
+  if(type === 'warmup') return 45;
+  if(type === 'drop') return 30;
+  return inferRestSeconds(repsVal);
+}
+
 async function startSessionMode(exercises, sourceInfo){
+  // Prefill each set's weight from the shared exercise-weight store — same value everywhere this exercise appears
+  const sharedWeights = await getAllExerciseWeights();
   SESSION = {
     exercises,
     idx: 0,
     sourceInfo,
-    setsDone: exercises.map(e => new Array(parseSetCount(e.sets)).fill(false)),
-    weights: exercises.map(()=> ''),
+    setData: exercises.map(e => {
+      const count = parseSetCount(e.sets);
+      const defaultWeight = sharedWeights[e.name] || '';
+      return new Array(count).fill(null).map(()=> ({ type:'working', weight: defaultWeight, reps:'', done:false }));
+    }),
     restInterval: null,
     restSeconds: 0,
   };
-  // Prefill weight inputs with whatever's already logged for each exercise
-  if(sourceInfo.source==='builtin'){
-    const weights = await getJSON('gym-weights', {});
-    SESSION.weights = exercises.map(e => weights[sourceInfo.day+'::'+e.name.replace(/\s+/g,'_')] || '');
-  } else {
-    const arr = await getJSON('custom-programs', []);
-    const p = arr.find(x=>x.id===sourceInfo.progId);
-    if(p){
-      SESSION.weights = exercises.map(e=>{
-        const match = p.days[sourceInfo.day].exercises.find(x=>x.name===e.name);
-        return match ? (match.load||'') : '';
-      });
-    }
-  }
 
   const overlay = document.createElement('div');
   overlay.className = 'session-overlay';
@@ -1466,7 +1545,7 @@ function renderSessionExercise(){
   const overlay = document.getElementById('sessionOverlay');
   if(!overlay || !SESSION) return;
   const ex = SESSION.exercises[SESSION.idx];
-  const setsDone = SESSION.setsDone[SESSION.idx];
+  const sets = SESSION.setData[SESSION.idx];
   const isLast = SESSION.idx === SESSION.exercises.length - 1;
 
   overlay.innerHTML = `
@@ -1478,16 +1557,24 @@ function renderSessionExercise(){
     <div class="session-body">
       <div class="session-exname">${ex.name}</div>
       <div class="session-target">${ex.sets} × ${ex.reps}</div>
+      <div class="session-hint">Tap a set's badge to mark it Warm-up, Drop Set, or Failure</div>
       <div class="session-sets">
-        ${setsDone.map((done,i)=>`
-          <div class="session-set-row ${done?'done':''}" data-setidx="${i}">
-            <span class="set-label">Set ${i+1}</span>
-            <div class="set-check">${ICONS.check}</div>
-          </div>`).join('')}
-      </div>
-      <div class="session-weight-row">
-        <label>Working Weight (kg)</label>
-        <input type="text" id="sessionWeightInput" value="${SESSION.weights[SESSION.idx]||''}" placeholder="kg">
+        ${sets.map((s,i)=>{
+          const meta = SET_TYPE_META[s.type];
+          return `
+          <div class="session-set-row ${s.done?'done':''}" data-setidx="${i}">
+            <div class="set-row-top">
+              <span class="set-label">Set ${i+1}</span>
+              <button class="set-type-badge ${meta.class}" data-typebtn="${i}">${meta.label}</button>
+              <div class="set-check" data-checkbtn="${i}">${ICONS.check}</div>
+            </div>
+            <div class="set-row-inputs">
+              <input class="set-input" type="text" inputmode="decimal" data-weightinput="${i}" value="${s.weight||''}" placeholder="kg">
+              <span class="set-x">×</span>
+              <input class="set-input" type="text" inputmode="numeric" data-repsinput="${i}" value="${s.reps||''}" placeholder="${ex.reps}">
+            </div>
+          </div>`;
+        }).join('')}
       </div>
     </div>
     <div class="session-nav">
@@ -1498,33 +1585,42 @@ function renderSessionExercise(){
     </div>
   `;
 
-  overlay.querySelectorAll('.session-set-row').forEach(row=>{
-    row.addEventListener('click', ()=>{
-      const i = parseInt(row.dataset.setidx);
-      const wasDone = SESSION.setsDone[SESSION.idx][i];
-      SESSION.setsDone[SESSION.idx][i] = !wasDone;
-      row.classList.toggle('done', !wasDone);
+  overlay.querySelectorAll('[data-typebtn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.typebtn);
+      sets[i].type = nextSetType(sets[i].type);
+      const meta = SET_TYPE_META[sets[i].type];
+      btn.className = `set-type-badge ${meta.class}`;
+      btn.textContent = meta.label;
+    });
+  });
+
+  overlay.querySelectorAll('[data-checkbtn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.checkbtn);
+      const wasDone = sets[i].done;
+      sets[i].done = !wasDone;
+      btn.closest('.session-set-row').classList.toggle('done', !wasDone);
       if(!wasDone){
-        startRestTimer(inferRestSeconds(ex.reps));
+        startRestTimer(restSecondsForSet(sets[i].type, ex.reps));
       }
     });
   });
 
-  document.getElementById('sessionWeightInput').addEventListener('input', (e)=>{
-    SESSION.weights[SESSION.idx] = e.target.value;
+  overlay.querySelectorAll('[data-weightinput]').forEach(inp=>{
+    inp.addEventListener('input', (e)=>{ sets[parseInt(inp.dataset.weightinput)].weight = e.target.value; });
   });
+  overlay.querySelectorAll('[data-repsinput]').forEach(inp=>{
+    inp.addEventListener('input', (e)=>{ sets[parseInt(inp.dataset.repsinput)].reps = e.target.value; });
+  });
+
   document.getElementById('sessionCloseBtn').addEventListener('click', closeSessionMode);
   const prevBtn = document.getElementById('sessionPrevBtn');
-  if(prevBtn) prevBtn.addEventListener('click', ()=>{ saveCurrentWeight(); SESSION.idx--; renderSessionExercise(); });
+  if(prevBtn) prevBtn.addEventListener('click', ()=>{ SESSION.idx--; renderSessionExercise(); });
   const nextBtn = document.getElementById('sessionNextBtn');
-  if(nextBtn) nextBtn.addEventListener('click', ()=>{ saveCurrentWeight(); SESSION.idx++; renderSessionExercise(); });
+  if(nextBtn) nextBtn.addEventListener('click', ()=>{ SESSION.idx++; renderSessionExercise(); });
   const finishBtn = document.getElementById('sessionFinishBtn');
   if(finishBtn) finishBtn.addEventListener('click', finishSessionMode);
-}
-
-function saveCurrentWeight(){
-  const inp = document.getElementById('sessionWeightInput');
-  if(inp) SESSION.weights[SESSION.idx] = inp.value;
 }
 
 function startRestTimer(seconds){
@@ -1573,26 +1669,39 @@ function endRestTimer(){
 }
 
 async function finishSessionMode(){
-  saveCurrentWeight();
-  const { sourceInfo, exercises, weights } = SESSION;
+  const { sourceInfo, exercises, setData } = SESSION;
 
-  if(sourceInfo.source === 'builtin'){
-    const w = await getJSON('gym-weights', {});
-    exercises.forEach((e,i)=>{
-      if(weights[i]) w[sourceInfo.day+'::'+e.name.replace(/\s+/g,'_')] = weights[i];
-    });
-    await setJSON('gym-weights', w);
-  } else {
-    const arr = await getJSON('custom-programs', []);
-    const p = arr.find(x=>x.id===sourceInfo.progId);
-    if(p){
-      exercises.forEach((e,i)=>{
-        const match = p.days[sourceInfo.day].exercises.find(x=>x.name===e.name);
-        if(match && weights[i]) match.load = weights[i];
-      });
-      await setJSON('custom-programs', arr);
-    }
+  // Representative weight per exercise = last completed working set's weight (falls back to any logged set)
+  // This is what gets saved to the shared exercise-weight store and what legacy chart code reads as e.weight
+  function representativeWeight(sets){
+    for(let i=sets.length-1;i>=0;i--){ if(sets[i].type==='working' && sets[i].weight) return sets[i].weight; }
+    for(let i=sets.length-1;i>=0;i--){ if(sets[i].weight) return sets[i].weight; }
+    return '';
   }
+
+  const repWeights = exercises.map((e,i)=> representativeWeight(setData[i]));
+
+  // Save each logged weight to the shared store — syncs to this exercise everywhere it appears
+  for(let i=0; i<exercises.length; i++){
+    if(repWeights[i]) await setExerciseWeight(exercises[i].name, repWeights[i]);
+  }
+
+  // Log this session permanently — this is what powers the progress charts
+  const history = await getJSON('session-history', []);
+  history.push({
+    date: todayKey(),
+    day: sourceInfo.day,
+    source: sourceInfo.source === 'builtin' ? 'Hybrid Athlete' : (sourceInfo.progId || 'Custom'),
+    exercises: exercises.map((e,i)=>({
+      name: e.name,
+      weight: repWeights[i] || '', // kept for backward-compat with existing charts/migration
+      sets: setData[i].map(s=>({ type:s.type, weight:s.weight||'', reps:s.reps||'', done:s.done })),
+      setsCompleted: setData[i].filter(s=>s.done).length,
+      totalSets: setData[i].length,
+      workingSetsCompleted: setData[i].filter(s=>s.done && s.type==='working').length,
+    })),
+  });
+  await setJSON('session-history', history);
 
   // Mark today's habit as done if this session is for today
   const todayName = new Date().toLocaleDateString('en-US',{weekday:'long'});
@@ -1607,6 +1716,7 @@ async function finishSessionMode(){
   renderGym();
   renderCheat();
   renderHabits();
+  renderTrackers();
 }
 
 function closeSessionMode(){
@@ -1630,7 +1740,7 @@ function renderRunning(){
       <div class="page-sub">17-week build from walk-run intervals to a continuous 30&nbsp;km finish on January 1.</div>
     </div>
     <div class="subtabs" id="runTabs">
-      <button class="subtab active" data-p="easy">Monday — Easy Run</button>
+      <button class="subtab active" data-p="easy">Tuesday — Easy Run</button>
       <button class="subtab" data-p="speed">Thursday — Speed Day</button>
       <button class="subtab" data-p="long">Sunday — Long Run</button>
     </div>
@@ -1783,7 +1893,7 @@ async function renderRecovery(){
     <div class="page-head">
       <div class="eyebrow">Built Into The Plan</div>
       <div class="page-title">Recovery Dashboard</div>
-      <div class="page-sub">Recovery is a training input, not an afterthought — one full rest day weekly, plus regular trekking prep.</div>
+      <div class="page-sub">Recovery is a training input, not an afterthought — built in through intensity variation and regular trekking prep.</div>
     </div>
     <div class="grid g2">
       <div class="card">
@@ -1796,8 +1906,8 @@ async function renderRecovery(){
       </div>
       <div class="card">
         <div class="icon-chip">${ICONS.recovery}</div>
-        <h3 style="margin-top:10px;">Sunday — Full Rest</h3>
-        <p class="muted" style="margin-top:6px;line-height:1.6;">No gym, no structured run. Light walking and stretching only. This is where muscle rebuilds and running legs recover for the next week's volume.</p>
+        <h3 style="margin-top:10px;">Active Recovery, Not Full Rest</h3>
+        <p class="muted" style="margin-top:6px;line-height:1.6;">This rotation trains all 7 days — there's no dedicated rest day. Recovery instead comes from varying intensity: Tuesday's Easy Run and Sunday's Long Run are both low-intensity aerobic work, not maximal effort, so they double as active recovery between the heavier gym sessions.</p>
       </div>
     </div>
     ${pulseLine()}
@@ -1911,8 +2021,12 @@ async function renderHabits(){
 }
 
 /* ---------- TRACKERS ---------- */
+function refreshTrackersKeepTab(){ renderTrackers(); }
+
 async function renderTrackers(){
   const el = document.getElementById('view-trackers');
+  const activeTabEl = document.querySelector('#trTabs .subtab.active');
+  const activeTab = activeTabEl ? activeTabEl.dataset.p : null;
   el.innerHTML = `
     <div class="page-head">
       <div class="eyebrow">Log It To Track It</div>
@@ -1920,12 +2034,34 @@ async function renderTrackers(){
       <div class="page-sub">Weight, body measurements, personal records, and running pace — logged over time.</div>
     </div>
     <div class="subtabs" id="trTabs">
-      <button class="subtab active" data-p="weight">Weight</button>
+      <button class="subtab active" data-p="progress">Progress</button>
+      <button class="subtab" data-p="weight">Body Weight</button>
       <button class="subtab" data-p="body">Body Measurements</button>
       <button class="subtab" data-p="pr">Personal Records</button>
       <button class="subtab" data-p="pace">Running Pace</button>
     </div>
-    <div class="pane active" data-pane="weight"><div class="card">
+    <div class="pane active" data-pane="progress">
+      <div class="card" style="margin-bottom:14px;">
+        <h3>Body Weight Trend</h3>
+        <div style="position:relative;height:220px;margin-top:12px;"><canvas id="chartWeight"></canvas></div>
+      </div>
+      <div class="card" style="margin-bottom:14px;">
+        <h3>Exercise Log</h3>
+        <p class="muted" style="margin-top:2px;">Every exercise you've ever logged, across every program. Tap one to see its progression.</p>
+        <div id="exerciseChipRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;"></div>
+        <div style="position:relative;height:220px;margin-top:16px;"><canvas id="chartStrength"></canvas></div>
+      </div>
+      <div class="card" style="margin-bottom:14px;">
+        <h3>Weekly Training Volume</h3>
+        <p class="muted" style="margin-top:2px;">Sessions logged per week via Session Mode.</p>
+        <div style="position:relative;height:220px;margin-top:12px;"><canvas id="chartVolume"></canvas></div>
+      </div>
+      <div class="card">
+        <h3>Body Measurements Trend</h3>
+        <div style="position:relative;height:240px;margin-top:12px;"><canvas id="chartBody"></canvas></div>
+      </div>
+    </div>
+    <div class="pane" data-pane="weight"><div class="card">
       <div class="form-row">
         <div class="field"><label>Date</label><input id="wDate" type="date"></div>
         <div class="field"><label>Weight (kg)</label><input id="wVal" type="number" step="0.1" style="width:100px;"></div>
@@ -1972,6 +2108,10 @@ async function renderTrackers(){
       el.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active', p.dataset.pane===t.dataset.p));
     });
   });
+  if(activeTab && activeTab !== 'progress'){
+    const restoreTab = el.querySelector(`#trTabs .subtab[data-p="${activeTab}"]`);
+    if(restoreTab) restoreTab.click();
+  }
 
   // Weight log
   let wLog = await getJSON('weight-log', []);
@@ -1983,7 +2123,7 @@ async function renderTrackers(){
     const date = document.getElementById('wDate').value || todayKey();
     const weight = parseFloat(document.getElementById('wVal').value);
     if(!weight) return;
-    wLog.push({date, weight}); await setJSON('weight-log', wLog); paintW();
+    wLog.push({date, weight}); await setJSON('weight-log', wLog); refreshTrackersKeepTab();
   });
 
   // Body measurements
@@ -2000,7 +2140,7 @@ async function renderTrackers(){
       shoulders:document.getElementById('bShoulders').value,
       arms:document.getElementById('bArms').value,
       thighs:document.getElementById('bThighs').value};
-    bLog.push(entry); await setJSON('measurements-log', bLog); paintB();
+    bLog.push(entry); await setJSON('measurements-log', bLog); refreshTrackersKeepTab();
   });
 
   // PR
@@ -2013,7 +2153,7 @@ async function renderTrackers(){
     const date = document.getElementById('pDate').value || todayKey();
     const ex = document.getElementById('pEx').value; const w = document.getElementById('pW').value; const r = document.getElementById('pR').value;
     if(!ex||!w) return;
-    pLog.push({date, ex, w, r}); await setJSON('pr-log', pLog); paintP();
+    pLog.push({date, ex, w, r}); await setJSON('pr-log', pLog); refreshTrackersKeepTab();
   });
 
   // Pace
@@ -2028,7 +2168,153 @@ async function renderTrackers(){
     if(!dist||!time) return;
     rLog.push({date, dist, time}); await setJSON('pace-log', rLog); paintR();
   });
+
+  renderProgressCharts(wLog, bLog, pLog);
 }
+
+/* ---------- PROGRESS CHARTS ---------- */
+let CHART_INSTANCES = {};
+const CHART_COLORS = { blue:'#0a6cff', ink:'#111114', gray:'#9a9aa2', green:'#1fb15a', amber:'#c98a12', red:'#e0352b' };
+
+function destroyChart(id){
+  if(CHART_INSTANCES[id]){ CHART_INSTANCES[id].destroy(); delete CHART_INSTANCES[id]; }
+}
+
+function baseChartOptions(extra){
+  return Object.assign({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display:false }, ticks: { font: { family:'Inter', size:10 }, color: CHART_COLORS.gray } },
+      y: { grid: { color:'#eeeef1' }, ticks: { font: { family:'IBM Plex Mono', size:10 }, color: CHART_COLORS.gray } },
+    },
+  }, extra||{});
+}
+
+async function renderProgressCharts(wLog, bLog, pLog){
+  if(typeof Chart === 'undefined'){ setTimeout(()=>renderProgressCharts(wLog,bLog,pLog), 300); return; }
+  const history = await getJSON('session-history', []);
+
+  // 1. Weight Trend
+  destroyChart('weight');
+  const wSorted = wLog.slice().sort((a,b)=> a.date.localeCompare(b.date));
+  const wCanvas = document.getElementById('chartWeight');
+  if(wCanvas){
+    if(!wSorted.length){
+      wCanvas.parentElement.innerHTML = `<p class="muted" style="padding-top:80px;text-align:center;">Log a few weight entries in the Weight tab to see your trend here.</p>`;
+    } else {
+      CHART_INSTANCES.weight = new Chart(wCanvas, {
+        type: 'line',
+        data: { labels: wSorted.map(r=>r.date), datasets: [{
+          data: wSorted.map(r=>r.weight), borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(10,108,255,.08)',
+          fill: true, tension: .3, pointRadius: 3, pointBackgroundColor: CHART_COLORS.blue,
+        }]},
+        options: baseChartOptions(),
+      });
+    }
+  }
+
+  // 2. Exercise Log — every exercise ever logged, across every program, click to see its chart
+  const exerciseNames = new Set();
+  history.forEach(s => s.exercises.forEach(e=>{ if(e.weight) exerciseNames.add(e.name); }));
+  pLog.forEach(p => exerciseNames.add(p.ex));
+  const chipRow = document.getElementById('exerciseChipRow');
+  if(chipRow){
+    const names = Array.from(exerciseNames).sort();
+    if(!names.length){
+      chipRow.innerHTML = `<p class="muted">No exercises logged yet — finish a session or add a PR to see them here.</p>`;
+      destroyChart('strength');
+      const canvas = document.getElementById('chartStrength');
+      if(canvas) canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+    } else {
+      chipRow.innerHTML = names.map((n,i)=>`<button class="exercise-chip ${i===0?'active':''}" data-ex="${n}">${n}</button>`).join('');
+      const drawStrengthChart = (chosen)=>{
+        destroyChart('strength');
+        const points = [];
+        history.forEach(s=>{
+          const match = s.exercises.find(e=>e.name===chosen && e.weight);
+          if(match) points.push({ date: s.date, weight: parseFloat(match.weight) });
+        });
+        pLog.filter(p=>p.ex===chosen).forEach(p=> points.push({ date: p.date, weight: parseFloat(p.w) }));
+        points.sort((a,b)=> a.date.localeCompare(b.date));
+        const canvas = document.getElementById('chartStrength');
+        if(!canvas) return;
+        if(!points.length){
+          canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height);
+          return;
+        }
+        CHART_INSTANCES.strength = new Chart(canvas, {
+          type: 'line',
+          data: { labels: points.map(p=>p.date), datasets: [{
+            data: points.map(p=>p.weight), borderColor: CHART_COLORS.ink, backgroundColor: 'rgba(17,17,20,.06)',
+            fill: true, tension: .25, pointRadius: 3, pointBackgroundColor: CHART_COLORS.ink,
+          }]},
+          options: baseChartOptions(),
+        });
+      };
+      drawStrengthChart(names[0]);
+      chipRow.querySelectorAll('.exercise-chip').forEach(chip=>{
+        chip.addEventListener('click', ()=>{
+          chipRow.querySelectorAll('.exercise-chip').forEach(c=>c.classList.remove('active'));
+          chip.classList.add('active');
+          drawStrengthChart(chip.dataset.ex);
+        });
+      });
+    }
+  }
+
+  // 3. Weekly Training Volume — sessions logged per week, last 8 weeks
+  destroyChart('volume');
+  const volCanvas = document.getElementById('chartVolume');
+  if(volCanvas){
+    if(!history.length){
+      volCanvas.parentElement.innerHTML = `<p class="muted" style="padding-top:80px;text-align:center;">Finish a few sessions in Session Mode to see your weekly volume here.</p>`;
+    } else {
+      function weekLabel(dateStr){
+        const d = new Date(dateStr+'T00:00:00');
+        const jan1 = new Date(d.getFullYear(),0,1);
+        const week = Math.ceil((((d - jan1)/86400000) + jan1.getDay()+1)/7);
+        return d.getFullYear()+'-W'+week;
+      }
+      const counts = {};
+      history.forEach(s=>{ const wk = weekLabel(s.date); counts[wk] = (counts[wk]||0)+1; });
+      const weeks = Object.keys(counts).sort().slice(-8);
+      CHART_INSTANCES.volume = new Chart(volCanvas, {
+        type: 'bar',
+        data: { labels: weeks, datasets: [{ data: weeks.map(w=>counts[w]), backgroundColor: CHART_COLORS.blue, borderRadius: 6, maxBarThickness: 36 }]},
+        options: baseChartOptions({ scales: { x:{ grid:{display:false}, ticks:{font:{family:'Inter',size:10},color:CHART_COLORS.gray} }, y:{ grid:{color:'#eeeef1'}, ticks:{precision:0, font:{family:'IBM Plex Mono',size:10},color:CHART_COLORS.gray} } } }),
+      });
+    }
+  }
+
+  // 4. Body Measurements Trend
+  destroyChart('body');
+  const bSorted = bLog.slice().sort((a,b)=> a.date.localeCompare(b.date));
+  const bodyCanvas = document.getElementById('chartBody');
+  if(bodyCanvas){
+    if(!bSorted.length){
+      bodyCanvas.parentElement.innerHTML = `<p class="muted" style="padding-top:100px;text-align:center;">Log body measurements to see trends here.</p>`;
+    } else {
+      const series = [
+        { key:'chest', label:'Chest', color: CHART_COLORS.blue },
+        { key:'waist', label:'Waist', color: CHART_COLORS.red },
+        { key:'shoulders', label:'Shoulders', color: CHART_COLORS.green },
+        { key:'arms', label:'Arms', color: CHART_COLORS.amber },
+        { key:'thighs', label:'Thighs', color: CHART_COLORS.ink },
+      ];
+      CHART_INSTANCES.body = new Chart(bodyCanvas, {
+        type: 'line',
+        data: { labels: bSorted.map(r=>r.date), datasets: series.map(s=>({
+          label: s.label, data: bSorted.map(r=> r[s.key] ? parseFloat(r[s.key]) : null),
+          borderColor: s.color, backgroundColor: s.color, tension: .3, pointRadius: 2, spanGaps: true,
+        }))},
+        options: baseChartOptions({ plugins: { legend: { display:true, position:'bottom', labels:{ boxWidth:10, font:{family:'Inter',size:11} } } } }),
+      });
+    }
+  }
+}
+
 
 /* ---------- CHEAT SHEET ---------- */
 async function renderCheat(){
@@ -2039,6 +2325,7 @@ async function renderCheat(){
   const habitState = await getJSON('habits:'+todayKey(), {});
 
   const activeId = await getJSON('active-program', null);
+  const cheatWeights = await getAllExerciseWeights();
   let sheetTitle, sessionHTML, activeProg = null;
   if(activeId){
     const custom = await getJSON('custom-programs', []);
@@ -2048,7 +2335,7 @@ async function renderCheat(){
     if(!dayData || dayData.type==='rest'){
       sessionHTML = `<div class="row"><span>Focus</span><span class="v">Full recovery</span></div>`;
     } else {
-      sessionHTML = dayData.exercises.map(e=>`<div class="row"><span>${e.name}</span><span class="v">${e.sets}×${e.reps}${e.load?' @ '+e.load:''}</span></div>`).join('') || `<div class="row"><span>Focus</span><span class="v">Training day — no exercises added yet</span></div>`;
+      sessionHTML = dayData.exercises.map(e=>`<div class="row"><span>${e.name}</span><span class="v">${e.sets}×${e.reps}${cheatWeights[e.name]?' @ '+cheatWeights[e.name]+'kg':''}</span></div>`).join('') || `<div class="row"><span>Focus</span><span class="v">Training day — no exercises added yet</span></div>`;
     }
   } else {
     const plan = WEEK_PLAN.find(d=>d.day===todayName) || {title:'Full Rest Day', type:'rest'};
@@ -2056,11 +2343,9 @@ async function renderCheat(){
     if(plan.type==='gym' || plan.type==='both'){
       const gymDay = GYM[todayName];
       if(gymDay){
-        const weights = await getJSON('gym-weights', {});
         sessionHTML = gymDay.exercises.map(e=>{
-          const key = todayName+'::'+e[0].replace(/\s+/g,'_');
-          const w = weights[key];
-          return `<div class="row"><span>${e[0]}</span><span class="v">${e[1]}×${e[2]}${w?' @ '+w+'kg':''}</span></div>`;
+          const logged = cheatWeights[e[0]];
+          return `<div class="row"><span>${e[0]}</span><span class="v">${e[1]}×${e[2]}${logged?' @ '+logged+'kg':''}</span></div>`;
         }).join('');
         if(plan.type==='both') sessionHTML += `<div class="row"><span>+ Recovery Run</span><span class="v">20-30 min</span></div>`;
       } else {
@@ -2236,11 +2521,13 @@ async function maybeShowOnboarding(){
    INIT
 ============================================================ */
 renderNav();
-buildMain();
-renderCountdown();
-showView('overview');
-maybeShowOnboarding();
-wireBackupButtons();
+migrateToSharedExerciseWeights().then(()=>{
+  buildMain();
+  renderCountdown();
+  showView('overview');
+  maybeShowOnboarding();
+  wireBackupButtons();
+});
 
 if('serviceWorker' in navigator){
   window.addEventListener('load', ()=>{
