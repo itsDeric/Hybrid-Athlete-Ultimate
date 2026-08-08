@@ -377,8 +377,8 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
       <input type="file" id="importFileInput" accept="application/json" style="display:none;">
       <div class="sync-meta" id="backupMeta" style="margin-top:8px;">Saves a file to your device — free, no account needed.</div>
     </div>
-    <div class="sidebar-foot">
-      <div class="countdown-label">30km Goal — Jan 1</div>
+    <div class="sidebar-foot" id="sidebarCountdown" style="display:none;">
+      <div class="countdown-label" id="countdownLabel">Goal</div>
       <div class="countdown-num" id="countdownNum">—</div>
       <div class="countdown-sub" id="countdownSub">days remaining</div>
     </div>
@@ -453,6 +453,47 @@ const RUN_LONG = [
   ['13','20 km',''], ['14','22 km',''], ['15','25 km',''], ['16','27 km',''],
   ['17','30 km','Goal Day — Jan 1'],
 ];
+
+// Running is not everyone's focus — some people just want to log the occasional run, others want a
+// structured build toward a specific race distance. Presets below generate a general progression
+// framework rather than assuming one fixed goal; the original 30K plan is preserved as a legacy option.
+const RUNNING_GOAL_PRESETS = [
+  { id:'5k',    label:'5K',             distance:5,    weeks:9  },
+  { id:'10k',   label:'10K',            distance:10,   weeks:10 },
+  { id:'half',  label:'Half Marathon',  distance:21.1, weeks:12 },
+  { id:'30k',   label:'30K Continuous', distance:30,   weeks:17 },
+];
+
+function generateRunProgression(distanceKm, weeks){
+  weeks = Math.max(6, Math.min(24, Math.round(weeks)));
+  const q1 = Math.max(1, Math.round(weeks*0.25));
+  const q2 = Math.max(q1+1, Math.round(weeks*0.5));
+  const q3 = Math.max(q2+1, Math.round(weeks*0.75));
+  const estMinutes = Math.max(20, Math.round(distanceKm*6)); // rough continuous-run estimate at an easy ~6 min/km pace
+  const easy = [
+    {w:'Week 1', d:'5 min walk → (Run 2 min / Walk 2 min) × 8 → 5 min cooldown walk'},
+    {w:`Week ${q1}`, d:'(Run 3 min / Walk 2 min) × repeat'},
+    {w:`Week ${q2}`, d:'(Run 8 min / Walk 2 min) × repeat'},
+    {w:`Week ${q3}`, d:`Run continuously for ${Math.round(estMinutes*0.6)} minutes`},
+    {w:`Week ${weeks}`, d:`Run continuously for ${estMinutes} minutes`},
+  ];
+  const speed = [
+    {w:'Week 1', d:'10 min warm-up jog → 6 × 1 min fast / 2 min easy → 10 min cooldown'},
+    {w:`Week ${q1}`, d:'10 min warm-up → 6 × 2 min fast / 90 sec easy → 10 min cooldown'},
+    {w:`Week ${q2}`, d:'10 min warm-up → 5 × 4 min fast / 2 min easy → 10 min cooldown'},
+    {w:`Week ${q3}`, d:'10 min warm-up → 4 × 6 min tempo / 2 min easy → 10 min cooldown'},
+    {w:`Week ${weeks}`, d:'10 min warm-up → 20 min continuous tempo → 10 min cooldown'},
+  ];
+  const long = [];
+  let dist = Math.max(1, Math.round(distanceKm*0.12*10)/10);
+  for(let w=1; w<=weeks; w++){
+    if(w===weeks){ long.push([String(w), `${distanceKm} km`, 'Goal Run']); continue; }
+    if(w % 4 === 0){ long.push([String(w), `${Math.round(dist*0.6*10)/10} km`, 'Recovery']); continue; }
+    dist = Math.min(distanceKm*0.9, dist*1.12);
+    long.push([String(w), `${Math.round(dist*10)/10} km`, '']);
+  }
+  return { easy, speed, long };
+}
 
 const WEEK_PLAN = [
   {day:'Monday', type:'gym', title:'Upper Body — Strength', icon:'gym'},
@@ -1896,39 +1937,71 @@ function closeSessionMode(){
 
 
 /* ---------- RUNNING ---------- */
-function renderRunning(){
+async function renderRunning(){
   const el = document.getElementById('view-running');
+  const goal = await getJSON('running-goal', undefined); // undefined = never chosen, null = explicitly freeform, object = active goal
+
+  if(goal === undefined){
+    renderRunningGoalPicker(el);
+    return;
+  }
+  if(goal === null){
+    renderRunningFreeform(el);
+    return;
+  }
+  renderRunningGoalPlan(el, goal);
+}
+
+function runningGoalHeaderControls(){
+  return `<button class="btn secondary" id="runChangeGoalBtn" style="font-size:12px;padding:8px 14px;">Change Goal</button>`;
+}
+
+function renderRunningGoalPicker(el){
   el.innerHTML = `
     <div class="page-head">
-      <div class="eyebrow">3× Weekly</div>
-      <div class="page-title">Running Dashboard</div>
-      <div class="page-sub">17-week build from walk-run intervals to a continuous 30&nbsp;km finish on January 1.</div>
+      <div class="eyebrow">Running</div>
+      <div class="page-title">Set Up Your Running</div>
+      <div class="page-sub">Not everyone wants a fixed program — pick a race distance to build toward, or skip the plan and just log runs as you do them.</div>
     </div>
-    <div class="subtabs" id="runTabs">
-      <button class="subtab active" data-p="easy">Tuesday — Easy Run</button>
-      <button class="subtab" data-p="speed">Thursday — Speed Day</button>
-      <button class="subtab" data-p="long">Sunday — Long Run</button>
-    </div>
-    <div class="pane active" data-pane="easy"><div class="card"><table>
-      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
-      <tbody>${RUN_EASY.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
-    </table></div></div>
-    <div class="pane" data-pane="speed"><div class="card"><table>
-      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
-      <tbody>${RUN_SPEED.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
-    </table></div></div>
-    <div class="pane" data-pane="long"><div class="card">
-      <div class="grid g4" style="margin-bottom:16px;">
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Goal Distance</div><div class="stat-value">30 <small>km</small></div></div>
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Goal Date</div><div class="stat-value" style="font-size:18px;">Jan 1</div></div>
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Build Duration</div><div class="stat-value">17 <small>wks</small></div></div>
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Recovery Weeks</div><div class="stat-value">4</div></div>
+    <div class="grid g2" style="margin-top:8px;">
+      ${RUNNING_GOAL_PRESETS.map(p=>`
+        <div class="card goal-pick-card" data-goal="${p.id}" style="cursor:pointer;">
+          <h3>${p.label}</h3>
+          <p class="muted" style="margin-top:4px;">${p.distance} km build over ${p.weeks} weeks.</p>
+        </div>`).join('')}
+      <div class="card goal-pick-card" data-goal="custom" style="cursor:pointer;">
+        <h3>Custom Goal</h3>
+        <p class="muted" style="margin-top:4px;">Pick your own target distance and timeline.</p>
       </div>
-      <table>
-      <thead><tr><th class="num">Week</th><th>Distance</th><th>Note</th></tr></thead>
-      <tbody>${RUN_LONG.map(r=>`<tr><td class="num">${r[0]}</td><td><b>${r[1]}</b></td><td>${r[2]?`<span class="tag ${r[2]==='Recovery'?'gray':'green'}">${r[2]}</span>`:''}</td></tr>`).join('')}</tbody>
-    </table></div></div>
+      <div class="card goal-pick-card" data-goal="freeform" style="cursor:pointer;border-color:var(--blue);">
+        <h3>No Structured Plan</h3>
+        <p class="muted" style="margin-top:4px;">Just log runs when you do them — no fixed schedule, no pressure.</p>
+      </div>
+    </div>
+  `;
+  el.querySelectorAll('.goal-pick-card').forEach(card=>{
+    card.addEventListener('click', async ()=>{
+      const id = card.dataset.goal;
+      if(id === 'freeform'){
+        await setJSON('running-goal', null);
+        renderRunning(); renderCountdown(); return;
+      }
+      if(id === 'custom'){
+        const distance = parseFloat(prompt('Target distance in km (e.g. 15):','15'));
+        const weeks = parseInt(prompt('Weeks to build up (6–24):','12'));
+        if(!distance || !weeks) return;
+        await setJSON('running-goal', { id:'custom', label:`${distance} km`, distance, weeks, startedOn:todayKey() });
+        renderRunning(); renderCountdown(); return;
+      }
+      const preset = RUNNING_GOAL_PRESETS.find(p=>p.id===id);
+      await setJSON('running-goal', Object.assign({}, preset, { startedOn:todayKey() }));
+      renderRunning(); renderCountdown();
+    });
+  });
+}
 
+function beforeAfterRunCards(){
+  return `
     ${pulseLine()}
     <div class="grid g2">
       <div class="card">
@@ -1943,8 +2016,93 @@ function renderRunning(){
           ${['5–10 min walk','Stretch calves','Stretch hamstrings','Stretch quads','Stretch hip flexors','Stretch glutes'].map(t=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${t}</span></div>`).join('')}
         </div>
       </div>
+    </div>`;
+}
+
+async function renderRunningFreeform(el){
+  const rLog = (await getJSON('pace-log', [])).slice().reverse();
+  el.innerHTML = `
+    <div class="page-head">
+      <div class="eyebrow">Running</div>
+      <div class="page-title">Running Log</div>
+      <div class="page-sub">No fixed schedule — just log a run whenever you do one.</div>
     </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">${runningGoalHeaderControls()}</div>
+    <div class="card" style="margin-bottom:14px;">
+      <h3>Log a Run</h3>
+      <div class="form-row" style="margin-top:10px;">
+        <div class="field"><label>Date</label><input type="date" id="rfDate" value="${todayKey()}"></div>
+        <div class="field"><label>Distance (km)</label><input type="number" step="0.1" id="rfDist" placeholder="5"></div>
+        <div class="field"><label>Time (min)</label><input type="number" step="0.5" id="rfTime" placeholder="30"></div>
+        <button class="btn" id="rfAdd">Log Run</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Recent Runs</h3>
+      <table style="margin-top:10px;"><thead><tr><th>Date</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Pace (min/km)</th></tr></thead>
+      <tbody>${rLog.length ? rLog.map(r=>`<tr><td>${r.date}</td><td class="num">${r.dist} km</td><td class="num">${r.time} min</td><td class="num">${(r.time/r.dist).toFixed(2)}</td></tr>`).join('') : `<tr><td colspan="4" class="muted">No runs logged yet</td></tr>`}</tbody></table>
+    </div>
+    ${beforeAfterRunCards()}
   `;
+  document.getElementById('runChangeGoalBtn').addEventListener('click', async ()=>{ await deleteRunningGoalKey(); renderRunning(); });
+  document.getElementById('rfAdd').addEventListener('click', async ()=>{
+    const date = document.getElementById('rfDate').value || todayKey();
+    const dist = parseFloat(document.getElementById('rfDist').value);
+    const time = parseFloat(document.getElementById('rfTime').value);
+    if(!dist || !time) return;
+    const log = await getJSON('pace-log', []);
+    log.push({date, dist, time});
+    await setJSON('pace-log', log);
+    renderRunningFreeform(el);
+    renderTrackers();
+  });
+}
+
+async function deleteRunningGoalKey(){
+  // 'running-goal' has three meaningful states (unset / null / object) — deleting the key itself
+  // is what returns it to "unset", so the next render shows the picker again.
+  localStorage.removeItem(LS_PREFIX+'running-goal');
+}
+
+function renderRunningGoalPlan(el, goal){
+  const isLegacy30k = goal.id === '30k';
+  const tables = isLegacy30k ? { easy:RUN_EASY, speed:RUN_SPEED, long:RUN_LONG } : generateRunProgression(goal.distance, goal.weeks);
+  el.innerHTML = `
+    <div class="page-head">
+      <div class="eyebrow">${goal.weeks}× Weekly Build</div>
+      <div class="page-title">Running Dashboard</div>
+      <div class="page-sub">${goal.weeks}-week build toward ${goal.distance}&nbsp;km${isLegacy30k?' — the original Hybrid Athlete plan':''}.</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">${runningGoalHeaderControls()}</div>
+    <div class="subtabs" id="runTabs">
+      <button class="subtab active" data-p="easy">Tuesday — Easy Run</button>
+      <button class="subtab" data-p="speed">Thursday — Speed Day</button>
+      <button class="subtab" data-p="long">Sunday — Long Run</button>
+    </div>
+    <div class="pane active" data-pane="easy"><div class="card"><table>
+      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
+      <tbody>${tables.easy.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
+    </table></div></div>
+    <div class="pane" data-pane="speed"><div class="card"><table>
+      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
+      <tbody>${tables.speed.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
+    </table></div></div>
+    <div class="pane" data-pane="long"><div class="card">
+      <div class="grid g4" style="margin-bottom:16px;">
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Goal Distance</div><div class="stat-value">${goal.distance} <small>km</small></div></div>
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Build Duration</div><div class="stat-value">${goal.weeks} <small>wks</small></div></div>
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Recovery Weeks</div><div class="stat-value">${tables.long.filter(r=>r[2]==='Recovery').length}</div></div>
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Goal</div><div class="stat-value" style="font-size:16px;">${goal.label}</div></div>
+      </div>
+      <table>
+      <thead><tr><th class="num">Week</th><th>Distance</th><th>Note</th></tr></thead>
+      <tbody>${tables.long.map(r=>`<tr><td class="num">${r[0]}</td><td><b>${r[1]}</b></td><td>${r[2]?`<span class="tag ${r[2]==='Recovery'?'gray':'green'}">${r[2]}</span>`:''}</td></tr>`).join('')}</tbody>
+    </table>
+    ${!isLegacy30k?`<p class="muted" style="margin-top:10px;font-size:12px;">This is a general progression framework, not personalized coaching — adjust based on how your body responds.</p>`:''}
+    </div></div>
+    ${beforeAfterRunCards()}
+  `;
+  document.getElementById('runChangeGoalBtn').addEventListener('click', async ()=>{ await deleteRunningGoalKey(); renderRunning(); });
   el.querySelectorAll('#runTabs .subtab').forEach(t=>{
     t.addEventListener('click',()=>{
       el.querySelectorAll('#runTabs .subtab').forEach(x=>x.classList.remove('active'));
@@ -2637,6 +2795,7 @@ async function renderCheat(){
     }
   }
 
+  const runGoal = await getJSON('running-goal', undefined);
   el.innerHTML = `
     <div class="page-head">
       <div class="eyebrow">At A Glance</div>
@@ -2672,7 +2831,7 @@ async function renderCheat(){
           ` : `
           <div class="row"><span>Sleep</span><span class="v">7.5–9 hrs</span></div>
           <div class="row"><span>Water</span><span class="v">On track</span></div>
-          <div class="row"><span>Goal Run</span><span class="v">30 km — Jan 1</span></div>
+          ${runGoal ? `<div class="row"><span>Run Goal</span><span class="v">${runGoal.distance} km in ${runGoal.weeks} wks</span></div>` : ''}
           `}
         </div>
       </div>
@@ -2689,14 +2848,19 @@ async function renderCheat(){
 /* ============================================================
    COUNTDOWN
 ============================================================ */
-function renderCountdown(){
+async function renderCountdown(){
+  const box = document.getElementById('sidebarCountdown');
+  if(!box) return;
+  const goal = await getJSON('running-goal', undefined);
+  if(!goal){ box.style.display = 'none'; return; } // undefined (never set) or null (explicitly freeform) — nothing to count down to
+  const start = new Date((goal.startedOn||todayKey())+'T00:00:00');
+  const target = new Date(start.getTime() + goal.weeks*7*86400000);
   const now = new Date();
-  let target = new Date(now.getFullYear()+ (now.getMonth()===0 && now.getDate()===1 ? 0 : (now>=new Date(now.getFullYear(),0,1)?1:0)), 0, 1);
-  // simplest robust logic: next Jan 1 strictly after today
-  target = new Date(now.getFullYear()+1, 0, 1);
-  if(now.getMonth()===0 && now.getDate()===1) target = now;
   const diffDays = Math.max(0, Math.ceil((target - now)/86400000));
+  document.getElementById('countdownLabel').textContent = `${goal.label} Goal`;
   document.getElementById('countdownNum').textContent = diffDays;
+  document.getElementById('countdownSub').textContent = diffDays===1 ? 'day remaining' : 'days remaining';
+  box.style.display = '';
 }
 
 /* ============================================================
