@@ -1,4 +1,6 @@
-const CACHE_NAME = 'hybrid-athlete-v1';
+// Bump this version string on every deploy that changes app behavior — forces old installed
+// PWAs/APKs to pick up the new code instead of silently serving a stale cached index.html forever.
+const CACHE_NAME = 'hybrid-athlete-v2';
 const ASSETS = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -17,8 +19,17 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Network-first: always try to fetch the latest version when online, and only fall back to the
+// cached copy if the network is unavailable. Previously this was cache-first, which meant an
+// installed app could keep running old code indefinitely even after new versions were deployed.
 self.addEventListener('fetch', (event) => {
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(event.request)
+      .then((fresh) => {
+        const copy = fresh.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return fresh;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
