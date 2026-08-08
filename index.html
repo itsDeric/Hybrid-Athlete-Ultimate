@@ -670,6 +670,57 @@ async function migrateToSharedExerciseWeights(){
   await setJSON('exercise-weights-migrated', true);
 }
 
+function estimated1RM(weight, reps){
+  const w = parseFloat(weight), r = parseInt(reps);
+  if(!w || !r || r < 1) return null;
+  return w * (1 + r/30); // Epley formula
+}
+
+// One-time backfill: auto PR detection only started watching for NEW sessions from the moment it
+// shipped — it never rescanned history that already existed. This walks every past session in
+// chronological order and reconstructs the PRs you would have gotten had the feature existed from
+// day one, so historical bests aren't invisible in the Personal Records table.
+async function backfillPRs(){
+  const done = await getJSON('pr-backfill-done', false);
+  if(done) return;
+  const history = (await getJSON('session-history', [])).slice().sort((a,b)=> a.date.localeCompare(b.date));
+  const running = {}; // exercise name -> { maxWeight, max1RM, maxSessionVolume }
+  const newEntries = [];
+  history.forEach(s=>{
+    const sessionVolumeByEx = {};
+    (s.exercises||[]).forEach(e=>{
+      if(!running[e.name]) running[e.name] = { maxWeight:0, max1RM:0, maxSessionVolume:0 };
+      const base = running[e.name];
+      let bestWeightSet=null, bestOneRM=0, bestOneRMSet=null, sessionVolume=0;
+      (e.sets||[]).forEach(set=>{
+        if(!set.done || set.type!=='working') return;
+        const w = parseFloat(set.weight);
+        if(w && (!bestWeightSet || w>parseFloat(bestWeightSet.weight))) bestWeightSet = set;
+        const oneRM = estimated1RM(set.weight, set.reps);
+        if(oneRM && oneRM>bestOneRM){ bestOneRM=oneRM; bestOneRMSet=set; }
+        if(w && set.reps) sessionVolume += w*parseInt(set.reps);
+      });
+      if(bestWeightSet && parseFloat(bestWeightSet.weight) > base.maxWeight){
+        newEntries.push({ date:s.date, ex:e.name, w:bestWeightSet.weight, r:bestWeightSet.reps||'', type:'Weight PR', auto:true });
+        base.maxWeight = parseFloat(bestWeightSet.weight);
+      }
+      if(bestOneRMSet && bestOneRM > base.max1RM){
+        newEntries.push({ date:s.date, ex:e.name, w:bestOneRMSet.weight, r:bestOneRMSet.reps||'', type:'Est. 1RM PR', auto:true });
+        base.max1RM = bestOneRM;
+      }
+      if(sessionVolume > base.maxSessionVolume && base.maxSessionVolume > 0){
+        newEntries.push({ date:s.date, ex:e.name, w:Math.round(sessionVolume), r:'', type:'Volume PR', auto:true });
+      }
+      if(sessionVolume > base.maxSessionVolume) base.maxSessionVolume = sessionVolume;
+    });
+  });
+  if(newEntries.length){
+    const prLog = await getJSON('pr-log', []);
+    await setJSON('pr-log', prLog.concat(newEntries));
+  }
+  await setJSON('pr-backfill-done', true);
+}
+
 /* ============================================================
    BACKUP & RESTORE — free, local file export/import.
    No account, no sign-in, works for anyone immediately.
@@ -1718,11 +1769,6 @@ async function finishSessionMode(){
   // Compares this session's completed working sets against everything logged before it (session
   // history + any manually-added PRs) and flags new bests, so PRs surface automatically instead of
   // requiring a separate manual entry every time.
-  function estimated1RM(weight, reps){
-    const w = parseFloat(weight), r = parseInt(reps);
-    if(!w || !r || r < 1) return null;
-    return w * (1 + r/30); // Epley formula
-  }
   const priorHistory = await getJSON('session-history', []);
   const priorPRs = await getJSON('pr-log', []);
   function baselineFor(name){
@@ -2667,7 +2713,7 @@ async function maybeShowOnboarding(){
    INIT
 ============================================================ */
 renderNav();
-migrateToSharedExerciseWeights().then(()=>{
+migrateToSharedExerciseWeights().then(()=> backfillPRs()).then(()=>{
   buildMain();
   renderCountdown();
   showView('overview');
