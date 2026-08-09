@@ -322,6 +322,7 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .session-set-row.done{background:rgba(31,177,90,.13);border-color:var(--green);}
 .set-row-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
 .set-label{font-weight:700;font-size:13.5px;flex-shrink:0;}
+.set-last-time{font-size:11px;color:var(--gray-400);font-family:var(--mono);margin-top:-3px;}
 .set-type-badge{border:none;border-radius:20px;padding:5px 11px;font-size:10.5px;font-weight:800;letter-spacing:.03em;cursor:pointer;text-transform:uppercase;font-family:var(--sans);white-space:nowrap;}
 .set-type-badge::after{content:' ▾';opacity:.6;font-size:9px;}
 .set-type-badge.type-working{background:rgba(10,108,255,.2);color:#8fbaff;}
@@ -1695,10 +1696,12 @@ function applyTypeAutoFill(sets, refWeight){
 async function startSessionMode(exercises, sourceInfo){
   // Prefill each set's weight from the shared exercise-weight store — same value everywhere this exercise appears
   const sharedWeights = await getAllExerciseWeights();
+  const history = await getJSON('session-history', []);
   SESSION = {
     exercises,
     idx: 0,
     sourceInfo,
+    history,
     refWeight: exercises.map(e => parseFloat(sharedWeights[e.name]) || 0),
     setData: exercises.map(e => {
       const count = parseSetCount(e.sets);
@@ -1716,12 +1719,35 @@ async function startSessionMode(exercises, sourceInfo){
   renderSessionExercise();
 }
 
+// "Last time" reference — finds the most recent prior session that logged this exercise with per-set
+// data, so Session Mode can show what you actually did last time right next to what you're doing now.
+function getLastTimeSets(exerciseName){
+  const history = (SESSION.history||[]).slice().sort((a,b)=> b.date.localeCompare(a.date));
+  for(const s of history){
+    const match = (s.exercises||[]).find(e=> e.name===exerciseName && e.sets && e.sets.some(set=>set.done));
+    if(match) return match.sets;
+  }
+  return null;
+}
+function lastTimeTextForSet(lastSets, currentType, i){
+  if(!lastSets) return '';
+  // Prefer the exact same slot if it was actually completed; otherwise fall back to the closest
+  // completed set of the same type, since sessions don't always have identical set structures.
+  let ref = (lastSets[i] && lastSets[i].done) ? lastSets[i] : null;
+  if(!ref || ref.type !== currentType){
+    ref = lastSets.find(s=> s.done && s.type===currentType) || ref;
+  }
+  if(!ref || !ref.done || !ref.weight) return '';
+  return `Last: ${ref.weight}kg${ref.reps?' × '+ref.reps:''}`;
+}
+
 function renderSessionExercise(){
   const overlay = document.getElementById('sessionOverlay');
   if(!overlay || !SESSION) return;
   const ex = SESSION.exercises[SESSION.idx];
   const sets = SESSION.setData[SESSION.idx];
   const isLast = SESSION.idx === SESSION.exercises.length - 1;
+  const lastSets = getLastTimeSets(ex.name);
 
   overlay.innerHTML = `
     <div class="session-top">
@@ -1736,6 +1762,7 @@ function renderSessionExercise(){
       <div class="session-sets">
         ${sets.map((s,i)=>{
           const meta = SET_TYPE_META[s.type];
+          const lastText = lastTimeTextForSet(lastSets, s.type, i);
           return `
           <div class="session-set-row ${s.done?'done':''}" data-setidx="${i}">
             <div class="set-row-top">
@@ -1743,6 +1770,7 @@ function renderSessionExercise(){
               <button class="set-type-badge ${meta.class}" data-typebtn="${i}">${meta.label}</button>
               <div class="set-check" data-checkbtn="${i}">${ICONS.check}</div>
             </div>
+            ${lastText?`<div class="set-last-time">${lastText}</div>`:''}
             <div class="set-row-inputs">
               <input class="set-input" type="text" inputmode="decimal" data-weightinput="${i}" value="${s.weight||''}" placeholder="kg">
               <span class="set-x">×</span>
