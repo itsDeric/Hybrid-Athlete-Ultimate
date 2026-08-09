@@ -216,6 +216,8 @@ input,select{font-family:var(--sans);font-size:13px;border:1px solid var(--gray-
 /* checkbox pill list */
 .check-list{display:flex;flex-direction:column;gap:2px;}
 .check-item{display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid var(--gray-100);cursor:pointer;user-select:none;}
+.run-row [data-runcheck]{cursor:pointer;}
+.run-row-done{background:rgba(31,177,90,.06);}
 .check-item:last-child{border-bottom:none;}
 .check-box{width:19px;height:19px;border-radius:6px;border:1.5px solid var(--gray-200);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:background .12s,border-color .12s;}
 .check-box.done{background:var(--blue);border-color:var(--blue);}
@@ -2064,9 +2066,24 @@ async function deleteRunningGoalKey(){
   localStorage.removeItem(LS_PREFIX+'running-goal');
 }
 
-function renderRunningGoalPlan(el, goal){
+async function renderRunningGoalPlan(el, goal){
   const isLegacy30k = goal.id === '30k';
   const tables = isLegacy30k ? { easy:RUN_EASY, speed:RUN_SPEED, long:RUN_LONG } : generateRunProgression(goal.distance, goal.weeks);
+  const completions = await getJSON('running-completions', {});
+  const goalKey = goal.id + ':' + (goal.startedOn||'');
+  const rLog = (await getJSON('pace-log', [])).slice().reverse().slice(0,5);
+
+  function rowHTML(type, w, sessionText, noteHTML){
+    const key = `${goalKey}::${type}::${w}`;
+    const done = !!completions[key];
+    return `<tr class="run-row ${done?'run-row-done':''}" data-key="${key}">
+      <td style="width:34px;"><div class="check-box ${done?'done':''}" data-runcheck="${key}">${done?ICONS.check:''}</div></td>
+      <td><span class="tag blue">${w}</span></td>
+      <td>${sessionText}</td>
+      ${noteHTML!==undefined?`<td>${noteHTML}</td>`:''}
+    </tr>`;
+  }
+
   el.innerHTML = `
     <div class="page-head">
       <div class="eyebrow">${goal.weeks}× Weekly Build</div>
@@ -2074,18 +2091,30 @@ function renderRunningGoalPlan(el, goal){
       <div class="page-sub">${goal.weeks}-week build toward ${goal.distance}&nbsp;km${isLegacy30k?' — the original Hybrid Athlete plan':''}.</div>
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">${runningGoalHeaderControls()}</div>
+    <div class="card" style="margin-bottom:14px;">
+      <h3>Log a Run</h3>
+      <p class="muted" style="margin-top:2px;">Logging here goes straight to your Running Pace tracker, regardless of which planned session it was.</p>
+      <div class="form-row" style="margin-top:10px;">
+        <div class="field"><label>Date</label><input type="date" id="rgDate" value="${todayKey()}"></div>
+        <div class="field"><label>Distance (km)</label><input type="number" step="0.1" id="rgDist" placeholder="${goal.distance}"></div>
+        <div class="field"><label>Time (min)</label><input type="number" step="0.5" id="rgTime" placeholder="30"></div>
+        <button class="btn" id="rgAdd">Log Run</button>
+      </div>
+      ${rLog.length?`<table style="margin-top:14px;"><thead><tr><th>Date</th><th class="num">Distance</th><th class="num">Time</th></tr></thead>
+      <tbody>${rLog.map(r=>`<tr><td>${r.date}</td><td class="num">${r.dist} km</td><td class="num">${r.time} min</td></tr>`).join('')}</tbody></table>`:''}
+    </div>
     <div class="subtabs" id="runTabs">
       <button class="subtab active" data-p="easy">Tuesday — Easy Run</button>
       <button class="subtab" data-p="speed">Thursday — Speed Day</button>
       <button class="subtab" data-p="long">Sunday — Long Run</button>
     </div>
     <div class="pane active" data-pane="easy"><div class="card"><table>
-      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
-      <tbody>${tables.easy.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
+      <thead><tr><th></th><th>Stage</th><th>Session</th></tr></thead>
+      <tbody>${tables.easy.map(r=>rowHTML('easy', r.w, r.d)).join('')}</tbody>
     </table></div></div>
     <div class="pane" data-pane="speed"><div class="card"><table>
-      <thead><tr><th>Stage</th><th>Session</th></tr></thead>
-      <tbody>${tables.speed.map(r=>`<tr><td><span class="tag blue">${r.w}</span></td><td>${r.d}</td></tr>`).join('')}</tbody>
+      <thead><tr><th></th><th>Stage</th><th>Session</th></tr></thead>
+      <tbody>${tables.speed.map(r=>rowHTML('speed', r.w, r.d)).join('')}</tbody>
     </table></div></div>
     <div class="pane" data-pane="long"><div class="card">
       <div class="grid g4" style="margin-bottom:16px;">
@@ -2095,8 +2124,8 @@ function renderRunningGoalPlan(el, goal){
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Goal</div><div class="stat-value" style="font-size:16px;">${goal.label}</div></div>
       </div>
       <table>
-      <thead><tr><th class="num">Week</th><th>Distance</th><th>Note</th></tr></thead>
-      <tbody>${tables.long.map(r=>`<tr><td class="num">${r[0]}</td><td><b>${r[1]}</b></td><td>${r[2]?`<span class="tag ${r[2]==='Recovery'?'gray':'green'}">${r[2]}</span>`:''}</td></tr>`).join('')}</tbody>
+      <thead><tr><th></th><th class="num">Week</th><th>Distance</th><th>Note</th></tr></thead>
+      <tbody>${tables.long.map(r=>rowHTML('long', r[0], `<b>${r[1]}</b>`, r[2]?`<span class="tag ${r[2]==='Recovery'?'gray':'green'}">${r[2]}</span>`:'')).join('')}</tbody>
     </table>
     ${!isLegacy30k?`<p class="muted" style="margin-top:10px;font-size:12px;">This is a general progression framework, not personalized coaching — adjust based on how your body responds.</p>`:''}
     </div></div>
@@ -2109,6 +2138,29 @@ function renderRunningGoalPlan(el, goal){
       t.classList.add('active');
       el.querySelectorAll('.pane').forEach(p=>p.classList.toggle('active', p.dataset.pane===t.dataset.p));
     });
+  });
+  el.querySelectorAll('[data-runcheck]').forEach(box=>{
+    box.addEventListener('click', async ()=>{
+      const key = box.dataset.runcheck;
+      const comp = await getJSON('running-completions', {});
+      comp[key] = !comp[key];
+      await setJSON('running-completions', comp);
+      const nowDone = comp[key];
+      box.classList.toggle('done', nowDone);
+      box.innerHTML = nowDone ? ICONS.check : '';
+      box.closest('.run-row').classList.toggle('run-row-done', nowDone);
+    });
+  });
+  document.getElementById('rgAdd').addEventListener('click', async ()=>{
+    const date = document.getElementById('rgDate').value || todayKey();
+    const dist = parseFloat(document.getElementById('rgDist').value);
+    const time = parseFloat(document.getElementById('rgTime').value);
+    if(!dist || !time) return;
+    const log = await getJSON('pace-log', []);
+    log.push({date, dist, time});
+    await setJSON('pace-log', log);
+    renderRunningGoalPlan(el, goal);
+    renderTrackers();
   });
 }
 
