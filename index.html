@@ -337,8 +337,9 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .set-x{color:var(--gray-400);font-size:12.5px;flex-shrink:0;}
 .plate-btn{flex-shrink:0;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 9px;font-size:14px;cursor:pointer;line-height:1;}
 .plate-readout{font-size:11.5px;color:var(--gray-400);margin-top:2px;padding:0 2px;}
-.set-remove-btn{flex-shrink:0;background:transparent;border:none;color:var(--gray-400);font-size:13px;cursor:pointer;padding:4px 6px;line-height:1;}
-.set-remove-btn:hover{color:var(--red);}
+.set-remove-row{text-align:right;margin-top:4px;}
+.set-remove-btn{background:transparent;border:none;color:var(--gray-400);font-size:11px;cursor:pointer;padding:3px 2px;line-height:1;text-decoration:underline;text-decoration-color:rgba(255,255,255,.2);}
+.set-remove-btn:hover{color:var(--red);text-decoration-color:var(--red);}
 .add-set-btn{width:100%;max-width:360px;margin-top:10px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.25);border-radius:12px;padding:12px;color:#fff;font-size:13.5px;font-weight:700;cursor:pointer;}
 .session-rest{position:fixed;inset:0;background:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:1150;}
 /* PR Toast */
@@ -1661,15 +1662,16 @@ function plateBreakdown(totalWeight, barWeight){
 // 2.5kg plate increment. Recomputed across all warm-up sets in the exercise whenever set types change,
 // but skips any set the user has manually typed a weight into (tracked via weightAuto).
 const WARMUP_PCTS = [0.4, 0.6, 0.8, 0.9];
-const DROP_PCT = 0.75;
+const DROP_PCTS = [0.75, 0.65, 0.55, 0.45]; // each successive drop set goes lighter than the last
 function roundToPlate(kg){ return Math.max(2.5, Math.round(kg/2.5)*2.5); }
 // Unified auto-fill across all set types — runs whenever a set's type changes or a set is added.
-// Working/Failure sets load the full reference weight; Warm-ups ramp 40/60/80/90%; Drop sets default
-// to 75% of the reference weight. Any set the user has manually typed into (weightAuto===false) is
+// Working/Failure sets load the full reference weight; Warm-ups ramp 40/60/80/90%; Drop sets step
+// progressively lighter (75/65/55/45%, then -10% per additional drop, floor 20%) rather than all
+// landing at a flat percentage. Any set the user has manually typed into (weightAuto===false) is
 // left untouched, so this never clobbers a deliberate entry.
 function applyTypeAutoFill(sets, refWeight){
   if(!refWeight) return;
-  let warmupOrder = 0;
+  let warmupOrder = 0, dropOrder = 0;
   sets.forEach(s=>{
     if(s.weightAuto === false) return; // user manually edited this one — leave it alone
     if(s.type === 'working' || s.type === 'failure'){
@@ -1681,8 +1683,10 @@ function applyTypeAutoFill(sets, refWeight){
       s.weightAuto = true;
       warmupOrder++;
     } else if(s.type === 'drop'){
-      s.weight = String(roundToPlate(refWeight * DROP_PCT));
+      const pct = DROP_PCTS[dropOrder] !== undefined ? DROP_PCTS[dropOrder] : Math.max(0.2, DROP_PCTS[DROP_PCTS.length-1] - 0.1*(dropOrder-DROP_PCTS.length+1));
+      s.weight = String(roundToPlate(refWeight * pct));
       s.weightAuto = true;
+      dropOrder++;
     }
   });
 }
@@ -1736,7 +1740,6 @@ function renderSessionExercise(){
             <div class="set-row-top">
               <span class="set-label">Set ${i+1}</span>
               <button class="set-type-badge ${meta.class}" data-typebtn="${i}">${meta.label}</button>
-              ${sets.length>1?`<button class="set-remove-btn" data-removebtn="${i}" title="Remove set">✕</button>`:''}
               <div class="set-check" data-checkbtn="${i}">${ICONS.check}</div>
             </div>
             <div class="set-row-inputs">
@@ -1746,6 +1749,7 @@ function renderSessionExercise(){
               <button class="plate-btn" data-platebtn="${i}" title="Plate breakdown">🏋</button>
             </div>
             <div class="plate-readout" data-plateout="${i}" style="display:none;"></div>
+            ${sets.length>1?`<div class="set-remove-row"><button class="set-remove-btn" data-removebtn="${i}">Delete set</button></div>`:''}
           </div>`;
         }).join('')}
       </div>
