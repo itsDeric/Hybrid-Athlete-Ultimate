@@ -337,6 +337,9 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .set-x{color:var(--gray-400);font-size:12.5px;flex-shrink:0;}
 .plate-btn{flex-shrink:0;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 9px;font-size:14px;cursor:pointer;line-height:1;}
 .plate-readout{font-size:11.5px;color:var(--gray-400);margin-top:2px;padding:0 2px;}
+.set-remove-btn{flex-shrink:0;background:transparent;border:none;color:var(--gray-400);font-size:13px;cursor:pointer;padding:4px 6px;line-height:1;}
+.set-remove-btn:hover{color:var(--red);}
+.add-set-btn{width:100%;max-width:360px;margin-top:10px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.25);border-radius:12px;padding:12px;color:#fff;font-size:13.5px;font-weight:700;cursor:pointer;}
 .session-rest{position:fixed;inset:0;background:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:1150;}
 /* PR Toast */
 .pr-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-20px);opacity:0;background:var(--black);color:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 12px 32px rgba(0,0,0,.3);z-index:1300;transition:opacity .3s ease,transform .3s ease;max-width:90vw;width:340px;}
@@ -1658,15 +1661,29 @@ function plateBreakdown(totalWeight, barWeight){
 // 2.5kg plate increment. Recomputed across all warm-up sets in the exercise whenever set types change,
 // but skips any set the user has manually typed a weight into (tracked via weightAuto).
 const WARMUP_PCTS = [0.4, 0.6, 0.8, 0.9];
+const DROP_PCT = 0.75;
 function roundToPlate(kg){ return Math.max(2.5, Math.round(kg/2.5)*2.5); }
-function applyWarmupSuggestions(sets, refWeight){
+// Unified auto-fill across all set types — runs whenever a set's type changes or a set is added.
+// Working/Failure sets load the full reference weight; Warm-ups ramp 40/60/80/90%; Drop sets default
+// to 75% of the reference weight. Any set the user has manually typed into (weightAuto===false) is
+// left untouched, so this never clobbers a deliberate entry.
+function applyTypeAutoFill(sets, refWeight){
   if(!refWeight) return;
-  const warmupIdxs = sets.map((s,i)=> s.type==='warmup' ? i : -1).filter(i=>i>=0);
-  warmupIdxs.forEach((idx,order)=>{
-    if(sets[idx].weightAuto === false) return; // user manually edited this one — leave it alone
-    const pct = WARMUP_PCTS[order] !== undefined ? WARMUP_PCTS[order] : WARMUP_PCTS[WARMUP_PCTS.length-1];
-    sets[idx].weight = String(roundToPlate(refWeight * pct));
-    sets[idx].weightAuto = true;
+  let warmupOrder = 0;
+  sets.forEach(s=>{
+    if(s.weightAuto === false) return; // user manually edited this one — leave it alone
+    if(s.type === 'working' || s.type === 'failure'){
+      s.weight = String(refWeight);
+      s.weightAuto = true;
+    } else if(s.type === 'warmup'){
+      const pct = WARMUP_PCTS[warmupOrder] !== undefined ? WARMUP_PCTS[warmupOrder] : WARMUP_PCTS[WARMUP_PCTS.length-1];
+      s.weight = String(roundToPlate(refWeight * pct));
+      s.weightAuto = true;
+      warmupOrder++;
+    } else if(s.type === 'drop'){
+      s.weight = String(roundToPlate(refWeight * DROP_PCT));
+      s.weightAuto = true;
+    }
   });
 }
 
@@ -1710,7 +1727,7 @@ function renderSessionExercise(){
     <div class="session-body">
       <div class="session-exname">${ex.name}</div>
       <div class="session-target">${ex.sets} × ${ex.reps}</div>
-      <div class="session-hint">Tap a set's badge to mark it Warm-up, Drop Set, or Failure — warm-ups auto-suggest a weight. Tap 🏋 for a plate breakdown.</div>
+      <div class="session-hint">Tap a badge to change set type — Working/Failure load your full weight, Warm-up ramps up, Drop Set defaults to 75%. Add or remove sets freely below.</div>
       <div class="session-sets">
         ${sets.map((s,i)=>{
           const meta = SET_TYPE_META[s.type];
@@ -1719,6 +1736,7 @@ function renderSessionExercise(){
             <div class="set-row-top">
               <span class="set-label">Set ${i+1}</span>
               <button class="set-type-badge ${meta.class}" data-typebtn="${i}">${meta.label}</button>
+              ${sets.length>1?`<button class="set-remove-btn" data-removebtn="${i}" title="Remove set">✕</button>`:''}
               <div class="set-check" data-checkbtn="${i}">${ICONS.check}</div>
             </div>
             <div class="set-row-inputs">
@@ -1731,6 +1749,7 @@ function renderSessionExercise(){
           </div>`;
         }).join('')}
       </div>
+      <button class="add-set-btn" id="addSetBtn">+ Add Set</button>
     </div>
     <div class="session-nav">
       ${SESSION.idx>0?`<button class="nav-prev" id="sessionPrevBtn">◀ Prev</button>`:''}
@@ -1744,9 +1763,25 @@ function renderSessionExercise(){
     btn.addEventListener('click', ()=>{
       const i = parseInt(btn.dataset.typebtn);
       sets[i].type = nextSetType(sets[i].type);
-      applyWarmupSuggestions(sets, SESSION.refWeight[SESSION.idx]);
-      renderSessionExercise(); // full re-render so any auto-filled warm-up weights show immediately
+      applyTypeAutoFill(sets, SESSION.refWeight[SESSION.idx]);
+      renderSessionExercise(); // full re-render so any auto-filled weights show immediately
     });
+  });
+
+  overlay.querySelectorAll('[data-removebtn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.removebtn);
+      if(sets.length <= 1) return; // always keep at least one set
+      sets.splice(i, 1);
+      renderSessionExercise();
+    });
+  });
+
+  const addSetBtn = document.getElementById('addSetBtn');
+  if(addSetBtn) addSetBtn.addEventListener('click', ()=>{
+    sets.push({ type:'working', weight:'', reps:'', done:false, weightAuto:null });
+    applyTypeAutoFill(sets, SESSION.refWeight[SESSION.idx]);
+    renderSessionExercise();
   });
 
   overlay.querySelectorAll('[data-checkbtn]').forEach(btn=>{
