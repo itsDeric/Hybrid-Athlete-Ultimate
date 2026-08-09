@@ -1722,8 +1722,13 @@ async function startSessionMode(exercises, sourceInfo){
 // "Last time" reference — finds the most recent prior session that logged this exercise with per-set
 // data, so Session Mode can show what you actually did last time right next to what you're doing now.
 function getLastTimeSets(exerciseName){
-  const history = (SESSION.history||[]).slice().sort((a,b)=> b.date.localeCompare(a.date));
-  for(const s of history){
+  // Iterate in reverse insertion order (not sorted by date string) — session-history entries are
+  // pushed chronologically as sessions finish, but multiple sessions on the same calendar day share
+  // an identical date string, so sorting by date alone can't tell which same-day session was more
+  // recent. Insertion order always reflects true chronological order regardless of same-day ties.
+  const history = SESSION.history || [];
+  for(let i=history.length-1; i>=0; i--){
+    const s = history[i];
     const match = (s.exercises||[]).find(e=> e.name===exerciseName && e.sets && e.sets.some(set=>set.done));
     if(match) return match.sets;
   }
