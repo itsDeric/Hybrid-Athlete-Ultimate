@@ -2159,6 +2159,22 @@ async function renderRunningGoalPlan(el, goal){
     const log = await getJSON('pace-log', []);
     log.push({date, dist, time});
     await setJSON('pace-log', log);
+    // Auto-check the Long Run week whose target distance roughly matches what was just logged —
+    // only the Long Run table has a directly comparable distance target (Easy/Speed are time/interval
+    // based), so this only applies there. Matches the first not-yet-completed week within tolerance.
+    const comp = await getJSON('running-completions', {});
+    const candidate = tables.long.find(r=>{
+      const key = `${goalKey}::long::${r[0]}`;
+      if(comp[key]) return false;
+      const target = parseFloat(r[1]);
+      if(!target) return false;
+      const tolerance = Math.max(0.5, target*0.15);
+      return Math.abs(dist - target) <= tolerance;
+    });
+    if(candidate){
+      comp[`${goalKey}::long::${candidate[0]}`] = true;
+      await setJSON('running-completions', comp);
+    }
     renderRunningGoalPlan(el, goal);
     renderTrackers();
   });
