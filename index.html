@@ -1734,16 +1734,13 @@ function getLastTimeSets(exerciseName){
   }
   return null;
 }
-function lastTimeTextForSet(lastSets, currentType, i){
+function lastWorkingSetText(lastSets){
   if(!lastSets) return '';
-  // Prefer the exact same slot if it was actually completed; otherwise fall back to the closest
-  // completed set of the same type, since sessions don't always have identical set structures.
-  let ref = (lastSets[i] && lastSets[i].done) ? lastSets[i] : null;
-  if(!ref || ref.type !== currentType){
-    ref = lastSets.find(s=> s.done && s.type===currentType) || ref;
-  }
-  if(!ref || !ref.done || !ref.weight) return '';
-  return `Last: ${ref.weight}kg${ref.reps?' × '+ref.reps:''}`;
+  // Only Working sets represent what you actually treat as "last time" — Warm-up/Drop/Failure sets
+  // are deliberately lighter or contextual and would be misleading shown as your reference point.
+  const ref = lastSets.slice().reverse().find(s=> s.done && s.type==='working' && s.weight);
+  if(!ref) return '';
+  return `Last working set: ${ref.weight}kg${ref.reps?' × '+ref.reps:''}`;
 }
 
 function renderSessionExercise(){
@@ -1752,7 +1749,7 @@ function renderSessionExercise(){
   const ex = SESSION.exercises[SESSION.idx];
   const sets = SESSION.setData[SESSION.idx];
   const isLast = SESSION.idx === SESSION.exercises.length - 1;
-  const lastSets = getLastTimeSets(ex.name);
+  const lastText = lastWorkingSetText(getLastTimeSets(ex.name));
 
   overlay.innerHTML = `
     <div class="session-top">
@@ -1763,11 +1760,11 @@ function renderSessionExercise(){
     <div class="session-body">
       <div class="session-exname">${ex.name}</div>
       <div class="session-target">${ex.sets} × ${ex.reps}</div>
+      ${lastText?`<div class="set-last-time" style="margin-top:2px;">${lastText}</div>`:''}
       <div class="session-hint">Tap a badge to change set type — Working/Failure load your full weight, Warm-up ramps up, Drop Set defaults to 75%. Add or remove sets freely below.</div>
       <div class="session-sets">
         ${sets.map((s,i)=>{
           const meta = SET_TYPE_META[s.type];
-          const lastText = lastTimeTextForSet(lastSets, s.type, i);
           return `
           <div class="session-set-row ${s.done?'done':''}" data-setidx="${i}">
             <div class="set-row-top">
@@ -1775,7 +1772,6 @@ function renderSessionExercise(){
               <button class="set-type-badge ${meta.class}" data-typebtn="${i}">${meta.label}</button>
               <div class="set-check" data-checkbtn="${i}">${ICONS.check}</div>
             </div>
-            ${lastText?`<div class="set-last-time">${lastText}</div>`:''}
             <div class="set-row-inputs">
               <input class="set-input" type="text" inputmode="decimal" data-weightinput="${i}" value="${s.weight||''}" placeholder="kg">
               <span class="set-x">×</span>
@@ -1916,15 +1912,18 @@ function endRestTimer(){
 async function finishSessionMode(){
   const { sourceInfo, exercises, setData } = SESSION;
 
-  // Representative weight per exercise = last COMPLETED working set's weight.
+  // Representative weight per exercise = last COMPLETED Working (or Failure) set's weight.
   // Must check `done` first — every set starts prefilled with the old default weight, so an
   // untouched, never-completed set still has a truthy weight and would otherwise get picked
   // over a set you actually did (e.g. finishing only Set 1 at a new weight while Sets 2-4 sit
   // untouched at their stale prefilled value).
+  // Critically, this must NEVER fall back to Warm-up or Drop Set weights — those are intentionally
+  // lighter than your working weight by design, and letting them leak into the shared working-weight
+  // store would silently corrupt it (e.g. a 70kg warm-up overwriting an actual 90kg working weight).
   function representativeWeight(sets){
     for(let i=sets.length-1;i>=0;i--){ if(sets[i].done && sets[i].type==='working' && sets[i].weight) return sets[i].weight; }
-    for(let i=sets.length-1;i>=0;i--){ if(sets[i].done && sets[i].weight) return sets[i].weight; }
-    for(let i=sets.length-1;i>=0;i--){ if(sets[i].weight) return sets[i].weight; } // fallback: nothing checked done but weight was typed in
+    for(let i=sets.length-1;i>=0;i--){ if(sets[i].done && sets[i].type==='failure' && sets[i].weight) return sets[i].weight; }
+    for(let i=sets.length-1;i>=0;i--){ if(sets[i].type==='working' && sets[i].weight) return sets[i].weight; } // fallback: nothing checked done but a working-type weight was typed in
     return '';
   }
 
