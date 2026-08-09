@@ -335,6 +335,8 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .set-input{flex:1;min-width:0;text-align:center;font-family:var(--mono);font-size:15px;font-weight:600;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:#fff;padding:7px 4px;}
 .set-input::placeholder{color:rgba(255,255,255,.3);}
 .set-x{color:var(--gray-400);font-size:12.5px;flex-shrink:0;}
+.plate-btn{flex-shrink:0;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 9px;font-size:14px;cursor:pointer;line-height:1;}
+.plate-readout{font-size:11.5px;color:var(--gray-400);margin-top:2px;padding:0 2px;}
 .session-rest{position:fixed;inset:0;background:var(--blue);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;z-index:1150;}
 /* PR Toast */
 .pr-toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-20px);opacity:0;background:var(--black);color:#fff;border-radius:14px;padding:16px 20px;box-shadow:0 12px 32px rgba(0,0,0,.3);z-index:1300;transition:opacity .3s ease,transform .3s ease;max-width:90vw;width:340px;}
@@ -1636,6 +1638,38 @@ function restSecondsForSet(type, repsVal){
   return inferRestSeconds(repsVal);
 }
 
+// Plate calculator — greedy breakdown assuming a standard 20kg Olympic bar and common plate sizes.
+// Uses unlimited-pairs assumption (typical commercial gym), not a specific rack's actual inventory.
+const PLATE_SIZES = [25, 20, 15, 10, 5, 2.5, 1.25];
+function plateBreakdown(totalWeight, barWeight){
+  barWeight = barWeight || 20;
+  const total = parseFloat(totalWeight);
+  if(!total || total <= barWeight) return null;
+  let perSide = (total - barWeight) / 2;
+  const used = [];
+  PLATE_SIZES.forEach(plate=>{
+    while(perSide >= plate - 0.001){ used.push(plate); perSide -= plate; }
+  });
+  const leftover = Math.round(perSide*100)/100;
+  return { perSideText: used.length ? used.map(p=> p%1===0?p:p.toFixed(2)).join(' + ') : 'Bar only', leftover };
+}
+
+// Warm-up auto-suggestion — percentage ramp of the exercise's working weight, rounded to the nearest
+// 2.5kg plate increment. Recomputed across all warm-up sets in the exercise whenever set types change,
+// but skips any set the user has manually typed a weight into (tracked via weightAuto).
+const WARMUP_PCTS = [0.4, 0.6, 0.8, 0.9];
+function roundToPlate(kg){ return Math.max(2.5, Math.round(kg/2.5)*2.5); }
+function applyWarmupSuggestions(sets, refWeight){
+  if(!refWeight) return;
+  const warmupIdxs = sets.map((s,i)=> s.type==='warmup' ? i : -1).filter(i=>i>=0);
+  warmupIdxs.forEach((idx,order)=>{
+    if(sets[idx].weightAuto === false) return; // user manually edited this one — leave it alone
+    const pct = WARMUP_PCTS[order] !== undefined ? WARMUP_PCTS[order] : WARMUP_PCTS[WARMUP_PCTS.length-1];
+    sets[idx].weight = String(roundToPlate(refWeight * pct));
+    sets[idx].weightAuto = true;
+  });
+}
+
 async function startSessionMode(exercises, sourceInfo){
   // Prefill each set's weight from the shared exercise-weight store — same value everywhere this exercise appears
   const sharedWeights = await getAllExerciseWeights();
@@ -1643,10 +1677,11 @@ async function startSessionMode(exercises, sourceInfo){
     exercises,
     idx: 0,
     sourceInfo,
+    refWeight: exercises.map(e => parseFloat(sharedWeights[e.name]) || 0),
     setData: exercises.map(e => {
       const count = parseSetCount(e.sets);
       const defaultWeight = sharedWeights[e.name] || '';
-      return new Array(count).fill(null).map(()=> ({ type:'working', weight: defaultWeight, reps:'', done:false }));
+      return new Array(count).fill(null).map(()=> ({ type:'working', weight: defaultWeight, reps:'', done:false, weightAuto:null }));
     }),
     restInterval: null,
     restSeconds: 0,
@@ -1675,7 +1710,7 @@ function renderSessionExercise(){
     <div class="session-body">
       <div class="session-exname">${ex.name}</div>
       <div class="session-target">${ex.sets} × ${ex.reps}</div>
-      <div class="session-hint">Tap a set's badge to mark it Warm-up, Drop Set, or Failure</div>
+      <div class="session-hint">Tap a set's badge to mark it Warm-up, Drop Set, or Failure — warm-ups auto-suggest a weight. Tap 🏋 for a plate breakdown.</div>
       <div class="session-sets">
         ${sets.map((s,i)=>{
           const meta = SET_TYPE_META[s.type];
@@ -1690,7 +1725,9 @@ function renderSessionExercise(){
               <input class="set-input" type="text" inputmode="decimal" data-weightinput="${i}" value="${s.weight||''}" placeholder="kg">
               <span class="set-x">×</span>
               <input class="set-input" type="text" inputmode="numeric" data-repsinput="${i}" value="${s.reps||''}" placeholder="${ex.reps}">
+              <button class="plate-btn" data-platebtn="${i}" title="Plate breakdown">🏋</button>
             </div>
+            <div class="plate-readout" data-plateout="${i}" style="display:none;"></div>
           </div>`;
         }).join('')}
       </div>
@@ -1707,9 +1744,8 @@ function renderSessionExercise(){
     btn.addEventListener('click', ()=>{
       const i = parseInt(btn.dataset.typebtn);
       sets[i].type = nextSetType(sets[i].type);
-      const meta = SET_TYPE_META[sets[i].type];
-      btn.className = `set-type-badge ${meta.class}`;
-      btn.textContent = meta.label;
+      applyWarmupSuggestions(sets, SESSION.refWeight[SESSION.idx]);
+      renderSessionExercise(); // full re-render so any auto-filled warm-up weights show immediately
     });
   });
 
@@ -1726,10 +1762,28 @@ function renderSessionExercise(){
   });
 
   overlay.querySelectorAll('[data-weightinput]').forEach(inp=>{
-    inp.addEventListener('input', (e)=>{ sets[parseInt(inp.dataset.weightinput)].weight = e.target.value; });
+    inp.addEventListener('input', (e)=>{
+      const i = parseInt(inp.dataset.weightinput);
+      sets[i].weight = e.target.value;
+      sets[i].weightAuto = false; // user typed a value — stop auto-suggesting over it
+    });
   });
   overlay.querySelectorAll('[data-repsinput]').forEach(inp=>{
     inp.addEventListener('input', (e)=>{ sets[parseInt(inp.dataset.repsinput)].reps = e.target.value; });
+  });
+
+  overlay.querySelectorAll('[data-platebtn]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const i = parseInt(btn.dataset.platebtn);
+      const out = overlay.querySelector(`[data-plateout="${i}"]`);
+      if(!out) return;
+      if(out.style.display !== 'none'){ out.style.display = 'none'; return; }
+      const bd = plateBreakdown(sets[i].weight, 20);
+      out.innerHTML = bd
+        ? `Per side: <b>${bd.perSideText}</b> kg${bd.leftover>0 ? ` <span class="muted">(~${bd.leftover}kg short of an exact plate match)</span>` : ''} — assumes a 20kg bar`
+        : `Enter a weight above ${20}kg to see a plate breakdown`;
+      out.style.display = 'block';
+    });
   });
 
   document.getElementById('sessionCloseBtn').addEventListener('click', closeSessionMode);
