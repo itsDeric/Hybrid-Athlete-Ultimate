@@ -340,6 +340,12 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 .plate-btn{flex-shrink:0;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 9px;font-size:14px;cursor:pointer;line-height:1;}
 .plate-readout{font-size:11.5px;color:var(--gray-400);margin-top:2px;padding:0 2px;}
 .set-remove-row{text-align:right;margin-top:4px;}
+.overload-suggestion{width:100%;max-width:360px;margin-top:14px;border-radius:12px;padding:12px 14px;text-align:left;font-size:13px;line-height:1.4;}
+.overload-suggestion.overload-up{background:rgba(31,177,90,.14);border:1px solid rgba(31,177,90,.35);}
+.overload-suggestion.overload-down{background:rgba(224,53,43,.12);border:1px solid rgba(224,53,43,.3);}
+.overload-suggestion.overload-flat{background:rgba(10,108,255,.12);border:1px solid rgba(10,108,255,.3);}
+.overload-apply-btn{margin-top:8px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;}
+.overload-apply-btn:hover{background:rgba(255,255,255,.2);}
 .set-remove-btn{background:transparent;border:none;color:var(--gray-400);font-size:11px;cursor:pointer;padding:3px 2px;line-height:1;text-decoration:underline;text-decoration-color:rgba(255,255,255,.2);}
 .set-remove-btn:hover{color:var(--red);text-decoration-color:var(--red);}
 .add-set-btn{width:100%;max-width:360px;margin-top:10px;background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.25);border-radius:12px;padding:12px;color:#fff;font-size:13.5px;font-weight:700;cursor:pointer;}
@@ -1743,13 +1749,50 @@ function lastWorkingSetText(lastSets){
   return `Last working set: ${ref.weight}kg${ref.reps?' × '+ref.reps:''}`;
 }
 
+// Progressive overload suggestion — compares your last session's completed Working sets against the
+// program's prescribed rep range and recommends a next step: increase weight if you hit the top of
+// range on every set, deload if you missed the range by a wide margin, or repeat and chase more reps
+// otherwise. This is a general heuristic, not personalized coaching.
+function parseRepRange(str){
+  const nums = String(str).match(/\d+/g);
+  if(!nums || !nums.length) return null;
+  const vals = nums.map(Number);
+  return { min: Math.min(...vals), max: Math.max(...vals) };
+}
+function suggestProgressiveOverload(lastSets, prescribedReps){
+  if(!lastSets) return null;
+  const range = parseRepRange(prescribedReps);
+  if(!range) return null;
+  const working = lastSets.filter(s=> s.done && s.type==='working' && s.weight && s.reps);
+  if(!working.length) return null;
+  const lastWeight = parseFloat(working[working.length-1].weight);
+  if(!lastWeight) return null;
+  const repsArr = working.map(s=>parseInt(s.reps));
+  const avgReps = repsArr.reduce((a,b)=>a+b,0)/repsArr.length;
+  const allHitTop = repsArr.every(r=> r>=range.max);
+  if(allHitTop){
+    const bump = lastWeight>=40 ? 2.5 : 1.25; // smaller increments for lighter loads (isolation work, dumbbells)
+    const target = roundToPlate(lastWeight+bump);
+    return { action:'increase', weight:target, message:`You hit ${range.max}+ reps on every working set last time — try ${target}kg today.` };
+  }
+  if(avgReps < range.min*0.7){
+    const target = roundToPlate(lastWeight*0.9);
+    return { action:'deload', weight:target, message:`You missed the rep target by a wide margin last time — ${target}kg to rebuild form and confidence might be worth trying.` };
+  }
+  return { action:'repeat', weight:lastWeight, message:`Within range but not maxed out — repeat ${lastWeight}kg and aim for ${range.max} reps on every set.` };
+}
+
 function renderSessionExercise(){
   const overlay = document.getElementById('sessionOverlay');
   if(!overlay || !SESSION) return;
   const ex = SESSION.exercises[SESSION.idx];
   const sets = SESSION.setData[SESSION.idx];
   const isLast = SESSION.idx === SESSION.exercises.length - 1;
-  const lastText = lastWorkingSetText(getLastTimeSets(ex.name));
+  const lastSetsData = getLastTimeSets(ex.name);
+  const lastText = lastWorkingSetText(lastSetsData);
+  const overload = suggestProgressiveOverload(lastSetsData, ex.reps);
+  const overloadClass = overload ? { increase:'overload-up', deload:'overload-down', repeat:'overload-flat' }[overload.action] : '';
+  const overloadIcon = overload ? { increase:'📈', deload:'📉', repeat:'🔁' }[overload.action] : '';
 
   overlay.innerHTML = `
     <div class="session-top">
@@ -1761,6 +1804,11 @@ function renderSessionExercise(){
       <div class="session-exname">${ex.name}</div>
       <div class="session-target">${ex.sets} × ${ex.reps}</div>
       ${lastText?`<div class="set-last-time" style="margin-top:2px;">${lastText}</div>`:''}
+      ${overload?`
+      <div class="overload-suggestion ${overloadClass}">
+        <div>${overloadIcon} ${overload.message}</div>
+        <button class="overload-apply-btn" id="applyOverloadBtn">Apply ${overload.weight}kg to working sets</button>
+      </div>`:''}
       <div class="session-hint">Tap a badge to change set type — Working/Failure load your full weight, Warm-up ramps up, Drop Set defaults to 75%. Add or remove sets freely below.</div>
       <div class="session-sets">
         ${sets.map((s,i)=>{
@@ -1815,6 +1863,13 @@ function renderSessionExercise(){
   if(addSetBtn) addSetBtn.addEventListener('click', ()=>{
     sets.push({ type:'working', weight:'', reps:'', done:false, weightAuto:null });
     applyTypeAutoFill(sets, SESSION.refWeight[SESSION.idx]);
+    renderSessionExercise();
+  });
+
+  const applyOverloadBtn = document.getElementById('applyOverloadBtn');
+  if(applyOverloadBtn && overload) applyOverloadBtn.addEventListener('click', ()=>{
+    // Explicit user action — overrides manual edits too, unlike the passive type-change auto-fill
+    sets.forEach(s=>{ if(s.type==='working'){ s.weight = String(overload.weight); s.weightAuto = true; } });
     renderSessionExercise();
   });
 
