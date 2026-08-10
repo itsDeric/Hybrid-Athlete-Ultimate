@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -261,15 +261,51 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
   #print-cheat{display:block !important;}
 }
 
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;}
+}
+
 /* responsive */
+.bottom-nav{display:none;}
 @media (max-width:860px){
   #app{flex-direction:column;}
-  .sidebar{width:100%;height:auto;position:relative;flex-direction:row;flex-wrap:wrap;padding:14px;}
-  .brand{padding:4px 8px;width:100%;}
-  .sidebar-foot{display:none;}
-  .main{padding:22px 18px 60px;}
+  .sidebar{display:none;}
+  .main{padding:22px 16px calc(84px + env(safe-area-inset-bottom));}
   .g4,.g3,.g2{grid-template-columns:1fr 1fr;}
   .sheet-grid{grid-template-columns:1fr;}
+
+  .bottom-nav{
+    display:flex;position:fixed;left:0;right:0;bottom:0;z-index:900;
+    background:rgba(10,10,12,.94);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    border-top:1px solid rgba(255,255,255,.08);
+    padding:6px 4px calc(6px + env(safe-area-inset-bottom));
+    justify-content:space-around;align-items:center;
+  }
+  .bottom-nav-btn{
+    display:flex;flex-direction:column;align-items:center;gap:3px;
+    background:none;border:none;color:var(--gray-400);
+    font-size:10px;font-weight:700;padding:6px 10px;min-width:56px;min-height:48px;
+    cursor:pointer;border-radius:12px;transition:color .15s ease;
+  }
+  .bottom-nav-btn svg{width:21px;height:21px;}
+  .bottom-nav-btn.active{color:var(--blue);}
+
+  .more-sheet-overlay{
+    position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.55);
+    display:none;align-items:flex-end;justify-content:center;
+  }
+  .more-sheet-overlay.open{display:flex;animation:fade .15s ease;}
+  .more-sheet{
+    background:var(--black);color:#fff;width:100%;max-width:600px;
+    border-radius:20px 20px 0 0;padding:10px 8px calc(20px + env(safe-area-inset-bottom));
+    max-height:75vh;overflow-y:auto;animation:sheetUp .25s cubic-bezier(.2,.9,.3,1);
+  }
+  .more-sheet-handle{width:36px;height:4px;background:rgba(255,255,255,.25);border-radius:2px;margin:6px auto 12px;}
+  .more-sheet-item{display:flex;align-items:center;gap:14px;width:100%;background:none;border:none;color:#fff;font-size:15px;font-weight:600;padding:14px 14px;border-radius:12px;text-align:left;cursor:pointer;min-height:48px;}
+  .more-sheet-item:active{background:rgba(255,255,255,.08);}
+  .more-sheet-item svg{width:20px;height:20px;color:var(--gray-400);flex-shrink:0;}
+  .more-sheet-divider{height:1px;background:rgba(255,255,255,.08);margin:6px 14px;}
+  @keyframes sheetUp{from{transform:translateY(100%);}to{transform:translateY(0);}}
 }
 /* Onboarding overlay */
 .onboard-overlay{
@@ -306,7 +342,8 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 /* Session Mode */
 .session-overlay{
   position:fixed;inset:0;z-index:1100;background:var(--black);color:#fff;
-  display:flex;flex-direction:column;padding:20px 20px 28px;
+  display:flex;flex-direction:column;
+  padding:calc(20px + env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));
   animation:fade .2s ease;
   overflow-y:auto;
 }
@@ -400,6 +437,20 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
     </div>
   </nav>
 
+  <!-- ============ MOBILE BOTTOM NAV ============ -->
+  <nav class="bottom-nav" id="bottomNav"></nav>
+
+  <!-- ============ MOBILE "MORE" SHEET ============ -->
+  <div class="more-sheet-overlay" id="moreSheetOverlay">
+    <div class="more-sheet">
+      <div class="more-sheet-handle"></div>
+      <div id="moreSheetItems"></div>
+      <div class="more-sheet-divider"></div>
+      <button class="more-sheet-item" id="moreExportBtn">Export Data</button>
+      <button class="more-sheet-item" id="moreImportBtn">Import Data</button>
+    </div>
+  </div>
+
   <!-- ============ MAIN ============ -->
   <main class="main" id="main"></main>
 </div>
@@ -428,6 +479,7 @@ const ICONS = {
   builder:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 6h9M4 12h6M4 18h11"/><circle cx="17" cy="6" r="2"/><circle cx="14" cy="18" r="2"/></svg>',
   plus:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2m-9 0 1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/></svg>',
+  more:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
 };
 
 /* ============================================================
@@ -839,6 +891,10 @@ function wireBackupButtons(){
   document.getElementById('exportDataBtn').addEventListener('click', exportData);
   document.getElementById('importDataBtn').addEventListener('click', importData);
   document.getElementById('importFileInput').addEventListener('change', handleImportFile);
+  // Mobile "More" sheet duplicates these two actions since the sidebar (where the originals live) is
+  // hidden below the 860px breakpoint — same underlying functions, just reachable from the sheet too.
+  document.getElementById('moreExportBtn').addEventListener('click', exportData);
+  document.getElementById('moreImportBtn').addEventListener('click', importData);
 }
 
 
@@ -859,12 +915,47 @@ const VIEWS = [
   {id:'cheat', label:'Cheat Sheet', icon:'cheat'},
 ];
 
+// The 4 most-used sections get a dedicated bottom-nav tab on mobile; everything else lives in the
+// "More" sheet. Chosen based on what you'd realistically want one-tap thumb access to mid-workout.
+const BOTTOM_NAV_IDS = ['overview', 'gym', 'running', 'trackers'];
+
 function renderNav(){
   const nav = document.getElementById('navlist');
   nav.innerHTML = VIEWS.map(v=>`<button class="navbtn" data-view="${v.id}">${ICONS[v.icon]}<span>${v.label}</span></button>`).join('');
   nav.querySelectorAll('.navbtn').forEach(btn=>{
     btn.addEventListener('click', ()=> showView(btn.dataset.view));
   });
+
+  // Mobile bottom nav — same VIEWS data, same showView() dispatch, just a second set of buttons
+  // (also tagged .navbtn so showView()'s active-state toggle applies to both automatically).
+  const bottomViews = VIEWS.filter(v=> BOTTOM_NAV_IDS.includes(v.id));
+  const moreViews = VIEWS.filter(v=> !BOTTOM_NAV_IDS.includes(v.id));
+  const bottomNav = document.getElementById('bottomNav');
+  bottomNav.innerHTML = bottomViews.map(v=>`<button class="navbtn bottom-nav-btn" data-view="${v.id}">${ICONS[v.icon]}<span>${v.label==='Overview'?'Home':v.label}</span></button>`).join('')
+    + `<button class="bottom-nav-btn" id="moreNavBtn">${ICONS.more}<span>More</span></button>`;
+  bottomNav.querySelectorAll('.navbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=> showView(btn.dataset.view));
+  });
+
+  const moreSheetItems = document.getElementById('moreSheetItems');
+  moreSheetItems.innerHTML = moreViews.map(v=>`<button class="more-sheet-item navbtn" data-view="${v.id}">${ICONS[v.icon]}<span>${v.label}</span></button>`).join('');
+  moreSheetItems.querySelectorAll('.navbtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ showView(btn.dataset.view); closeMoreSheet(); });
+  });
+
+  document.getElementById('moreNavBtn').addEventListener('click', openMoreSheet);
+  document.getElementById('moreSheetOverlay').addEventListener('click', (e)=>{
+    if(e.target.id === 'moreSheetOverlay') closeMoreSheet();
+  });
+}
+
+function openMoreSheet(){
+  document.getElementById('moreSheetOverlay').classList.add('open');
+  document.getElementById('moreNavBtn').classList.add('active');
+}
+function closeMoreSheet(){
+  document.getElementById('moreSheetOverlay').classList.remove('open');
+  document.getElementById('moreNavBtn').classList.remove('active');
 }
 
 const VIEW_RENDERERS = {
@@ -884,6 +975,8 @@ const VIEW_RENDERERS = {
 function showView(id, opts){
   opts = opts || {};
   document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active', b.dataset.view===id));
+  const moreBtn = document.getElementById('moreNavBtn');
+  if(moreBtn) moreBtn.classList.toggle('active', !BOTTOM_NAV_IDS.includes(id));
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   const el = document.getElementById('view-'+id);
   if(el) el.classList.add('active');
