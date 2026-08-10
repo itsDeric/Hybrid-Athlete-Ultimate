@@ -881,13 +881,34 @@ const VIEW_RENDERERS = {
   cheat: renderCheat,
 };
 
-function showView(id){
+function showView(id, opts){
+  opts = opts || {};
   document.querySelectorAll('.navbtn').forEach(b=>b.classList.toggle('active', b.dataset.view===id));
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   const el = document.getElementById('view-'+id);
   if(el) el.classList.add('active');
   if(VIEW_RENDERERS[id]) VIEW_RENDERERS[id]();
+  window.scrollTo(0,0);
+  // Push a browser history entry for every real navigation so hardware/gesture back on mobile moves
+  // between app views instead of exiting the installed app entirely. Skip this when we're already
+  // responding to a back/forward press (fromPopState) to avoid pushing a duplicate entry.
+  if(!opts.fromPopState){
+    history.pushState({ view:id }, '', '#'+id);
+  }
 }
+
+// Back/forward navigation — Session Mode behaves like a modal: the first back-press dismisses it
+// without changing the underlying view, matching normal mobile app behavior. A second back-press
+// then moves between main views as expected. Without this, the installed PWA/APK had no way to
+// navigate back at all — hardware back would just exit the app.
+window.addEventListener('popstate', (e)=>{
+  if(SESSION){
+    closeSessionMode();
+    return;
+  }
+  const view = (e.state && e.state.view) || 'overview';
+  showView(view, { fromPopState:true });
+});
 
 function pulseLine(){
   return `<svg class="pulse" viewBox="0 0 600 22" preserveAspectRatio="none"><path d="M0 11 H220 L235 2 L250 20 L262 11 H380 L392 4 L404 18 L416 11 H600"/></svg>`;
@@ -1722,6 +1743,10 @@ async function startSessionMode(exercises, sourceInfo){
   overlay.className = 'session-overlay';
   overlay.id = 'sessionOverlay';
   document.body.appendChild(overlay);
+  // Push a history entry marking Session Mode as open, so the first back-press closes it instead of
+  // exiting the app. Using window.history explicitly since a local `history` (session log) variable
+  // shadows the global in this function's scope.
+  window.history.pushState({ session:true }, '', '#session');
   renderSessionExercise();
 }
 
@@ -1910,7 +1935,7 @@ function renderSessionExercise(){
     });
   });
 
-  document.getElementById('sessionCloseBtn').addEventListener('click', closeSessionMode);
+  document.getElementById('sessionCloseBtn').addEventListener('click', ()=> history.back());
   const prevBtn = document.getElementById('sessionPrevBtn');
   if(prevBtn) prevBtn.addEventListener('click', ()=>{ SESSION.idx--; renderSessionExercise(); });
   const nextBtn = document.getElementById('sessionNextBtn');
@@ -2080,7 +2105,10 @@ async function finishSessionMode(){
   // Keep the Gym Dashboard on the day you just trained instead of snapping back to the first day of the week
   GYM_STATE.activeDay = sourceInfo.day;
 
-  closeSessionMode();
+  // Route through history.back() rather than calling closeSessionMode() directly — otherwise the
+  // "session open" history entry pushed when Session Mode started is left stranded on the stack,
+  // and the next back-press would land on the wrong view instead of where the user actually was.
+  history.back();
   renderGym();
   renderCheat();
   renderHabits();
@@ -3215,7 +3243,12 @@ renderNav();
 migrateToSharedExerciseWeights().then(()=> backfillPRs()).then(()=>{
   buildMain();
   renderCountdown();
-  showView('overview');
+  // Establish a clean baseline history entry for the initial view (respecting a bookmarked/shared
+  // URL hash if present) using replaceState rather than pushState, so the very first back-press
+  // correctly exits the app instead of leaving a confusing extra entry underneath it.
+  const initialView = (location.hash && VIEWS.some(v=>v.id===location.hash.slice(1))) ? location.hash.slice(1) : 'overview';
+  history.replaceState({ view:initialView }, '', '#'+initialView);
+  showView(initialView, { fromPopState:true });
   maybeShowOnboarding();
   wireBackupButtons();
 });
