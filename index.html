@@ -284,13 +284,22 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
     justify-content:space-around;align-items:center;
   }
   .bottom-nav-btn{
-    display:flex;flex-direction:column;align-items:center;gap:3px;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    width:auto;text-align:center;
     background:none;border:none;color:var(--gray-400);
-    font-size:10px;font-weight:700;padding:6px 10px;min-width:56px;min-height:48px;
-    cursor:pointer;border-radius:12px;transition:color .15s ease;
+    font-size:10px;font-weight:700;letter-spacing:.01em;
+    padding:6px 14px;min-width:56px;min-height:48px;
+    cursor:pointer;border-radius:12px;position:relative;
+    transition:color .18s ease;
   }
-  .bottom-nav-btn svg{width:21px;height:21px;}
-  .bottom-nav-btn.active{color:var(--blue);}
+  .bottom-nav-btn svg{width:21px;height:21px;stroke-width:1.8;transition:stroke-width .18s ease, filter .18s ease;flex-shrink:0;}
+  .bottom-nav-btn.active{color:var(--blue);background:none;}
+  .bottom-nav-btn.active svg{stroke-width:2.3;filter:drop-shadow(0 0 5px rgba(10,108,255,.55));}
+  /* Small dot beneath the icon instead of a pill/blob background — keeps the icon itself as the focus */
+  .bottom-nav-btn.active::after{
+    content:'';position:absolute;bottom:2px;left:50%;transform:translateX(-50%);
+    width:4px;height:4px;border-radius:50%;background:var(--blue);
+  }
 
   .more-sheet-overlay{
     position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.55);
@@ -944,7 +953,13 @@ function renderNav(){
   const moreSheetItems = document.getElementById('moreSheetItems');
   moreSheetItems.innerHTML = moreViews.map(v=>`<button class="more-sheet-item" data-view="${v.id}">${ICONS[v.icon]}<span>${v.label}</span></button>`).join('');
   moreSheetItems.querySelectorAll('[data-view]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{ showView(btn.dataset.view); closeMoreSheet(); });
+    btn.addEventListener('click', ()=>{
+      // Selecting an item: tear down the sheet directly (no history.back()) and let showView()'s
+      // replaceState collapse the sheet's pushed entry into the new view's entry in one step —
+      // calling history.back() here too would race with showView()'s own history write.
+      closeMoreSheetVisual();
+      showView(btn.dataset.view);
+    });
   });
 
   document.getElementById('moreNavBtn').addEventListener('click', openMoreSheet);
@@ -953,13 +968,44 @@ function renderNav(){
   });
 }
 
+// Robust background-scroll lock (position:fixed technique) — CSS overscroll-behavior alone stops
+// pull-to-refresh chaining at a scroll boundary, but doesn't stop the page behind a modal from
+// scrolling if a touch starts on the backdrop itself rather than inside the scrollable sheet/overlay.
+let SCROLL_LOCK_Y = 0;
+function lockBodyScroll(){
+  SCROLL_LOCK_Y = window.scrollY;
+  document.body.style.position = 'fixed';
+  document.body.style.top = `-${SCROLL_LOCK_Y}px`;
+  document.body.style.left = '0';
+  document.body.style.right = '0';
+}
+function unlockBodyScroll(){
+  document.body.style.position = '';
+  document.body.style.top = '';
+  document.body.style.left = '';
+  document.body.style.right = '';
+  window.scrollTo(0, SCROLL_LOCK_Y);
+}
+
+// More sheet behaves like a modal, same as Session Mode: opening pushes a real history entry so the
+// first back-press (hardware/gesture) dismisses the sheet instead of exiting the app outright.
 function openMoreSheet(){
   document.getElementById('moreSheetOverlay').classList.add('open');
   document.getElementById('moreNavBtn').classList.add('active');
+  lockBodyScroll();
+  history.pushState({ sheet:true }, '', location.hash);
 }
-function closeMoreSheet(){
+// Visual-only teardown, no history manipulation — used both by the popstate handler (after a real
+// back navigation already occurred) and by the item-select path (which replaces state instead).
+function closeMoreSheetVisual(){
   document.getElementById('moreSheetOverlay').classList.remove('open');
   document.getElementById('moreNavBtn').classList.remove('active');
+  unlockBodyScroll();
+}
+// Explicit dismiss (backdrop tap) — routes through history.back() so the pushed entry is actually
+// popped; the popstate handler then calls closeMoreSheetVisual() to do the real teardown.
+function closeMoreSheet(){
+  history.back();
 }
 
 const VIEW_RENDERERS = {
@@ -992,13 +1038,18 @@ function showView(id){
   history.replaceState({ view:id }, '', '#'+id);
 }
 
-// Back/forward navigation — Session Mode behaves like a modal and is the only thing that pushes a
-// real history entry (see startSessionMode). One back-press closes it; since regular tab navigation
-// no longer stacks, a second back-press from the underlying view then correctly exits the app rather
-// than continuing to step through previously-visited tabs.
+// Back/forward navigation — Session Mode and the More sheet both behave like modals and are the only
+// things that push a real history entry (see startSessionMode / openMoreSheet). One back-press closes
+// whichever is open; since regular tab navigation no longer stacks, a subsequent back-press from the
+// underlying view then correctly exits the app rather than stepping through previously-visited tabs.
 window.addEventListener('popstate', (e)=>{
   if(SESSION){
     closeSessionMode();
+    return;
+  }
+  const moreSheet = document.getElementById('moreSheetOverlay');
+  if(moreSheet && moreSheet.classList.contains('open')){
+    closeMoreSheetVisual();
     return;
   }
   const view = (e.state && e.state.view) || 'overview';
@@ -1838,6 +1889,7 @@ async function startSessionMode(exercises, sourceInfo){
   overlay.className = 'session-overlay';
   overlay.id = 'sessionOverlay';
   document.body.appendChild(overlay);
+  lockBodyScroll();
   // Push a history entry marking Session Mode as open, so the first back-press closes it instead of
   // exiting the app. Using window.history explicitly since a local `history` (session log) variable
   // shadows the global in this function's scope.
@@ -2237,6 +2289,7 @@ function closeSessionMode(){
   if(rest) rest.remove();
   const overlay = document.getElementById('sessionOverlay');
   if(overlay) overlay.remove();
+  unlockBodyScroll();
   SESSION = null;
 }
 
