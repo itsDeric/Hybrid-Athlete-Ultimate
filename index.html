@@ -313,7 +313,9 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
     -webkit-overflow-scrolling:touch;touch-action:pan-y;
     animation:sheetUp .25s cubic-bezier(.2,.9,.3,1);
   }
-  .more-sheet-handle{width:36px;height:4px;background:rgba(255,255,255,.25);border-radius:2px;margin:6px auto 12px;}
+  .more-sheet-handle-hit{display:flex;align-items:center;justify-content:center;padding:14px 0;margin:-8px 0 4px;touch-action:none;cursor:grab;}
+  .more-sheet-handle-hit:active{cursor:grabbing;}
+  .more-sheet-handle{width:36px;height:4px;background:rgba(255,255,255,.25);border-radius:2px;}
   .more-sheet-item{display:flex;align-items:center;gap:14px;width:100%;background:none;border:none;color:#fff;font-size:15px;font-weight:600;padding:14px 14px;border-radius:12px;text-align:left;cursor:pointer;min-height:48px;}
   .more-sheet-item:active{background:rgba(255,255,255,.08);}
   .more-sheet-item svg{width:20px;height:20px;color:var(--gray-400);flex-shrink:0;}
@@ -457,7 +459,7 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
   <!-- ============ MOBILE "MORE" SHEET ============ -->
   <div class="more-sheet-overlay" id="moreSheetOverlay">
     <div class="more-sheet">
-      <div class="more-sheet-handle"></div>
+      <div class="more-sheet-handle-hit" id="moreSheetHandleHit"><div class="more-sheet-handle"></div></div>
       <div id="moreSheetItems"></div>
       <div class="more-sheet-divider"></div>
       <button class="more-sheet-item" id="moreExportBtn">Export Data</button>
@@ -969,6 +971,41 @@ function renderNav(){
   document.getElementById('moreSheetOverlay').addEventListener('click', (e)=>{
     if(e.target.id === 'moreSheetOverlay') closeMoreSheet();
   });
+  wireSheetDragToDismiss();
+}
+
+// Drag-to-dismiss on the handle only (not the whole sheet) — deliberately scoped this narrowly so it
+// never competes with the sheet's own list scrolling. Pointer events unify touch/mouse in one handler.
+function wireSheetDragToDismiss(){
+  const hit = document.getElementById('moreSheetHandleHit');
+  const sheet = document.querySelector('.more-sheet');
+  if(!hit || !sheet) return;
+  let startY = 0, dragDelta = 0, dragging = false;
+
+  hit.addEventListener('pointerdown', (e)=>{
+    dragging = true;
+    startY = e.clientY;
+    sheet.style.transition = 'none';
+    hit.setPointerCapture(e.pointerId);
+  });
+  hit.addEventListener('pointermove', (e)=>{
+    if(!dragging) return;
+    dragDelta = Math.max(0, e.clientY - startY); // only allow dragging downward, never up past start
+    sheet.style.transform = `translateY(${dragDelta}px)`;
+  });
+  function endDrag(){
+    if(!dragging) return;
+    dragging = false;
+    sheet.style.transition = 'transform .25s cubic-bezier(.2,.9,.3,1)';
+    if(dragDelta > 80){
+      closeMoreSheet(); // routes through history.back(); popstate resets the transform on teardown
+    } else {
+      sheet.style.transform = 'translateY(0)';
+    }
+    dragDelta = 0;
+  }
+  hit.addEventListener('pointerup', endDrag);
+  hit.addEventListener('pointercancel', endDrag);
 }
 
 // More sheet behaves like a modal, same as Session Mode: opening pushes a real history entry so the
@@ -980,6 +1017,8 @@ function renderNav(){
 function openMoreSheet(){
   document.getElementById('moreSheetOverlay').classList.add('open');
   document.getElementById('moreNavBtn').classList.add('active');
+  const sheet = document.querySelector('.more-sheet');
+  if(sheet) sheet.style.transform = ''; // defensive reset in case a prior drag didn't fully clean up
   history.pushState({ sheet:true }, '', location.hash);
 }
 // Visual-only teardown, no history manipulation — used both by the popstate handler (after a real
@@ -987,6 +1026,8 @@ function openMoreSheet(){
 function closeMoreSheetVisual(){
   document.getElementById('moreSheetOverlay').classList.remove('open');
   document.getElementById('moreNavBtn').classList.remove('active');
+  const sheet = document.querySelector('.more-sheet');
+  if(sheet) sheet.style.transform = ''; // reset any in-progress drag offset so it doesn't reopen shifted
 }
 // Explicit dismiss (backdrop tap) — routes through history.back() so the pushed entry is actually
 // popped; the popstate handler then calls closeMoreSheetVisual() to do the real teardown.
