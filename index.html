@@ -309,7 +309,9 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
   .more-sheet{
     background:var(--black);color:#fff;width:100%;max-width:600px;
     border-radius:20px 20px 0 0;padding:10px 8px calc(20px + env(safe-area-inset-bottom));
-    max-height:75vh;overflow-y:auto;overscroll-behavior:contain;animation:sheetUp .25s cubic-bezier(.2,.9,.3,1);
+    max-height:75vh;min-height:0;overflow-y:auto;overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;touch-action:pan-y;
+    animation:sheetUp .25s cubic-bezier(.2,.9,.3,1);
   }
   .more-sheet-handle{width:36px;height:4px;background:rgba(255,255,255,.25);border-radius:2px;margin:6px auto 12px;}
   .more-sheet-item{display:flex;align-items:center;gap:14px;width:100%;background:none;border:none;color:#fff;font-size:15px;font-weight:600;padding:14px 14px;border-radius:12px;text-align:left;cursor:pointer;min-height:48px;}
@@ -353,10 +355,11 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
 /* Session Mode */
 .session-overlay{
   position:fixed;inset:0;z-index:1100;background:var(--black);color:#fff;
-  display:flex;flex-direction:column;
+  display:flex;flex-direction:column;min-height:0;
   padding:calc(20px + env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));
   animation:fade .2s ease;
   overflow-y:auto;overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;touch-action:pan-y;
 }
 .session-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
 .session-close{background:rgba(255,255,255,.08);border:none;color:#fff;width:34px;height:34px;border-radius:50%;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;}
@@ -968,31 +971,15 @@ function renderNav(){
   });
 }
 
-// Robust background-scroll lock (position:fixed technique) — CSS overscroll-behavior alone stops
-// pull-to-refresh chaining at a scroll boundary, but doesn't stop the page behind a modal from
-// scrolling if a touch starts on the backdrop itself rather than inside the scrollable sheet/overlay.
-let SCROLL_LOCK_Y = 0;
-function lockBodyScroll(){
-  SCROLL_LOCK_Y = window.scrollY;
-  document.body.style.position = 'fixed';
-  document.body.style.top = `-${SCROLL_LOCK_Y}px`;
-  document.body.style.left = '0';
-  document.body.style.right = '0';
-}
-function unlockBodyScroll(){
-  document.body.style.position = '';
-  document.body.style.top = '';
-  document.body.style.left = '';
-  document.body.style.right = '';
-  window.scrollTo(0, SCROLL_LOCK_Y);
-}
-
 // More sheet behaves like a modal, same as Session Mode: opening pushes a real history entry so the
 // first back-press (hardware/gesture) dismisses the sheet instead of exiting the app outright.
+// Background-scroll protection is CSS-only (touch-action:none on the backdrop, overscroll-behavior on
+// the sheet/body) — a JS position:fixed body-lock was tried here and reverted: it's a known cause of
+// broken touch-scroll on nested overflow:auto containers on mobile, and ended up breaking the sheet's
+// own scrolling instead of just protecting the backdrop.
 function openMoreSheet(){
   document.getElementById('moreSheetOverlay').classList.add('open');
   document.getElementById('moreNavBtn').classList.add('active');
-  lockBodyScroll();
   history.pushState({ sheet:true }, '', location.hash);
 }
 // Visual-only teardown, no history manipulation — used both by the popstate handler (after a real
@@ -1000,7 +987,6 @@ function openMoreSheet(){
 function closeMoreSheetVisual(){
   document.getElementById('moreSheetOverlay').classList.remove('open');
   document.getElementById('moreNavBtn').classList.remove('active');
-  unlockBodyScroll();
 }
 // Explicit dismiss (backdrop tap) — routes through history.back() so the pushed entry is actually
 // popped; the popstate handler then calls closeMoreSheetVisual() to do the real teardown.
@@ -1889,7 +1875,6 @@ async function startSessionMode(exercises, sourceInfo){
   overlay.className = 'session-overlay';
   overlay.id = 'sessionOverlay';
   document.body.appendChild(overlay);
-  lockBodyScroll();
   // Push a history entry marking Session Mode as open, so the first back-press closes it instead of
   // exiting the app. Using window.history explicitly since a local `history` (session log) variable
   // shadows the global in this function's scope.
@@ -2289,7 +2274,6 @@ function closeSessionMode(){
   if(rest) rest.remove();
   const overlay = document.getElementById('sessionOverlay');
   if(overlay) overlay.remove();
-  unlockBodyScroll();
   SESSION = null;
 }
 
