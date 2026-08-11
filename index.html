@@ -974,38 +974,57 @@ function renderNav(){
   wireSheetDragToDismiss();
 }
 
-// Drag-to-dismiss on the handle only (not the whole sheet) — deliberately scoped this narrowly so it
-// never competes with the sheet's own list scrolling. Pointer events unify touch/mouse in one handler.
+// Drag-to-dismiss, gated on scroll position rather than which element was touched — this is the
+// pattern every production bottom sheet uses (iOS native sheets, Android BottomSheetBehavior, Vaul,
+// etc.) and is provably unambiguous: dragging the handle always dismisses; dragging the list content
+// only dismisses once it's already scrolled to the very top AND the drag continues downward from
+// there. Any drag that starts with scrollable content still above (sheet.scrollTop > 0), or moves
+// upward, is always left alone for native scrolling — this function never even calls preventDefault
+// in that case, so the browser's own touch-scroll handles it with zero interference.
 function wireSheetDragToDismiss(){
-  const hit = document.getElementById('moreSheetHandleHit');
   const sheet = document.querySelector('.more-sheet');
-  if(!hit || !sheet) return;
-  let startY = 0, dragDelta = 0, dragging = false;
+  const handle = document.getElementById('moreSheetHandleHit');
+  if(!sheet) return;
+  let startY = 0, dragDelta = 0, dragging = false, mode = null; // mode: 'dismiss' | 'scroll' | null
 
-  hit.addEventListener('pointerdown', (e)=>{
-    dragging = true;
+  sheet.addEventListener('pointerdown', (e)=>{
     startY = e.clientY;
+    dragDelta = 0;
+    dragging = true;
+    // The handle is always a dismiss-drag regardless of scroll position; content is only a
+    // dismiss-drag if it's already scrolled fully to the top when the gesture begins.
+    mode = (handle && handle.contains(e.target)) ? 'dismiss' : (sheet.scrollTop <= 0 ? 'pending' : 'scroll');
     sheet.style.transition = 'none';
-    hit.setPointerCapture(e.pointerId);
   });
-  hit.addEventListener('pointermove', (e)=>{
+  sheet.addEventListener('pointermove', (e)=>{
     if(!dragging) return;
-    dragDelta = Math.max(0, e.clientY - startY); // only allow dragging downward, never up past start
+    const delta = e.clientY - startY;
+    if(mode === 'scroll') return; // let the browser's native scroll handle this entirely
+    if(mode === 'pending'){
+      // First movement decides intent: dragging down from the top → dismiss; anything else → scroll
+      if(delta <= 0){ mode = 'scroll'; return; }
+      mode = 'dismiss';
+    }
+    // mode is 'dismiss' from here on for this gesture
+    dragDelta = Math.max(0, delta);
     sheet.style.transform = `translateY(${dragDelta}px)`;
   });
   function endDrag(){
     if(!dragging) return;
     dragging = false;
-    sheet.style.transition = 'transform .25s cubic-bezier(.2,.9,.3,1)';
-    if(dragDelta > 80){
-      closeMoreSheet(); // routes through history.back(); popstate resets the transform on teardown
-    } else {
-      sheet.style.transform = 'translateY(0)';
+    if(mode === 'dismiss'){
+      sheet.style.transition = 'transform .25s cubic-bezier(.2,.9,.3,1)';
+      if(dragDelta > 80){
+        closeMoreSheet(); // routes through history.back(); popstate resets the transform on teardown
+      } else {
+        sheet.style.transform = 'translateY(0)';
+      }
     }
     dragDelta = 0;
+    mode = null;
   }
-  hit.addEventListener('pointerup', endDrag);
-  hit.addEventListener('pointercancel', endDrag);
+  sheet.addEventListener('pointerup', endDrag);
+  sheet.addEventListener('pointercancel', endDrag);
 }
 
 // More sheet behaves like a modal, same as Session Mode: opening pushes a real history entry so the
