@@ -176,6 +176,16 @@ td.num,th.num{font-family:var(--mono);}
 
 .tag{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;}
 .tag.blue{background:var(--blue-dim);color:var(--blue);}
+.goal-progress-track{width:100%;height:8px;background:var(--gray-100);border-radius:99px;overflow:hidden;margin-top:12px;}
+.goal-progress-fill{height:100%;background:var(--blue);border-radius:99px;transition:width .35s ease;}
+.goal-progress-fill.complete{background:var(--green);}
+.goal-card-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+.goal-card-actions button{font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--gray-200);background:#fff;cursor:pointer;font-weight:600;color:var(--ink);}
+.goal-card-actions button:hover{background:var(--gray-50);}
+.goal-card-actions button.danger{color:var(--red);border-color:rgba(224,53,43,.3);}
+.goal-card-actions button.primary-action{color:var(--blue);border-color:var(--blue-dim);}
+.goal-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media (max-width:600px){ .goal-form-grid{grid-template-columns:1fr;} } /* form fields with long option text (e.g. "Higher is better (e.g. strength, distance)") get cramped in 2 columns on narrow phones — stack instead */
 .tag.gray{background:var(--gray-100);color:var(--gray-600);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
@@ -487,6 +497,8 @@ const ICONS = {
   trackers:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V9M12 19V4M20 19v-7"/></svg>',
   cheat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>',
   profile:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>',
+  goals:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5" fill="currentColor"/></svg>',
+  goals:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>',
   check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M4 12.5l4.5 4.5L20 6"/></svg>',
   water:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3s6 6.5 6 11a6 6 0 1 1-12 0c0-4.5 6-11 6-11z"/></svg>',
   moon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4 7 7 0 0 0 20 14.5z"/></svg>',
@@ -931,6 +943,7 @@ const VIEWS = [
   {id:'trackers', label:'Trackers', icon:'trackers'},
   {id:'cheat', label:'Cheat Sheet', icon:'cheat'},
   {id:'profile', label:'Athlete Profile', icon:'profile'},
+  {id:'goals', label:'Training Goals', icon:'goals'},
 ];
 
 // The 4 most-used sections get a dedicated bottom-nav tab on mobile; everything else lives in the
@@ -1069,6 +1082,7 @@ const VIEW_RENDERERS = {
   trackers: renderTrackers,
   cheat: renderCheat,
   profile: renderProfile,
+  goals: renderTrainingGoals,
 };
 
 function showView(id){
@@ -1127,6 +1141,7 @@ function buildMain(){
   renderTrackers();
   renderCheat();
   renderProfile();
+  renderTrainingGoals();
 }
 
 /* ---------- ATHLETE PROFILE ----------
@@ -1274,6 +1289,277 @@ async function renderProfile(){
     if(msg){ msg.style.opacity = '1'; setTimeout(()=>{ msg.style.opacity = '0'; }, 1800); }
   });
 }
+
+/* ---------- TRAINING GOALS ----------
+   Builds directly on the Athlete Profile's primary/secondary objective fields — those stay as plain
+   text on the profile; this is where an objective becomes a specific measurable target. Stored under
+   its own 'training-goals' key (an array), using the same getJSON/setJSON persistence already used
+   everywhere else — not a new storage system. */
+
+// Time goals (e.g. a 5K finish time) are entered as MM:SS but stored as total seconds internally, so
+// progress math stays on plain numbers rather than needing separate time-parsing logic at calc time.
+function parseTimeToSeconds(str){
+  const m = String(str).trim().match(/^(\d+):(\d{1,2})$/);
+  if(!m) return null;
+  return parseInt(m[1])*60 + parseInt(m[2]);
+}
+function formatSecondsToTime(sec){
+  sec = Math.round(sec);
+  const m = Math.floor(sec/60), s = sec%60;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+// Progress is intentionally simple and transparent: how far current has moved from where the goal
+// started, relative to the total distance to target — direction-aware so a "lower is better" goal
+// (like a 5K time) doesn't get treated as regressing when the number goes down.
+function computeGoalProgress(goal){
+  const { startValue, currentValue, targetValue, direction } = goal;
+  const span = direction === 'lower' ? (startValue - targetValue) : (targetValue - startValue);
+  if(!span) return currentValue === targetValue ? 100 : 0; // start === target — avoid divide-by-zero
+  const moved = direction === 'lower' ? (startValue - currentValue) : (currentValue - startValue);
+  return Math.max(0, Math.min(100, Math.round((moved / span) * 100)));
+}
+
+function formatGoalValue(goal, value){
+  if(goal.unit === 'min:sec') return formatSecondsToTime(value);
+  return `${value}${goal.unit ? ' '+goal.unit : ''}`;
+}
+
+async function renderTrainingGoals(){
+  const el = document.getElementById('view-goals');
+  const goals = await getJSON('training-goals', []);
+  const profile = await getAthleteProfile();
+  const active = goals.filter(g=>g.status!=='completed');
+  const completed = goals.filter(g=>g.status==='completed');
+  const primary = active.find(g=>g.designation==='primary');
+  const secondary = active.filter(g=>g.designation!=='primary');
+
+  function goalCardHTML(g){
+    const pct = computeGoalProgress(g);
+    return `
+    <div class="card goal-card" data-goalid="${g.id}" style="margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <span class="tag ${g.designation==='primary'?'blue':'gray'}">${g.designation==='primary'?'PRIMARY GOAL':'SECONDARY GOAL'}</span>
+        <span class="tag gray">${g.category}</span>
+      </div>
+      <h3 style="margin-top:10px;">${g.name}</h3>
+      <div class="grid g2" style="margin-top:10px;">
+        <div><div class="stat-label">Current</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.currentValue)}</div></div>
+        <div><div class="stat-label">Target</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.targetValue)}</div></div>
+      </div>
+      <div class="goal-progress-track"><div class="goal-progress-fill${pct>=100?' complete':''}" style="width:${pct}%;"></div></div>
+      <p class="muted" style="margin-top:6px;font-size:12px;">${pct}% of the way to target${g.deadline?` · by ${g.deadline}`:''}</p>
+      <div class="goal-card-actions">
+        <button data-editgoal="${g.id}">Edit</button>
+        ${g.designation!=='primary'?`<button class="primary-action" data-setprimary="${g.id}">Set as Primary</button>`:''}
+        <button data-completegoal="${g.id}">Mark Complete</button>
+        <button class="danger" data-deletegoal="${g.id}">Delete</button>
+      </div>
+    </div>`;
+  }
+
+  el.innerHTML = `
+    <div class="page-head">
+      <div class="eyebrow">Measurable Targets</div>
+      <div class="page-title">Training Goals</div>
+      <div class="page-sub">Turn your profile's objectives into specific targets you can track progress against.${profile.primaryGoal?` Your profile's primary objective: <b>${profile.primaryGoal}</b>.`:''}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h3 id="goalFormTitle">Add a Goal</h3>
+      <input type="hidden" id="gfEditId" value="">
+      <div class="goal-form-grid" style="margin-top:12px;">
+        <div class="field"><label>Goal Name</label><input id="gfName" type="text" placeholder="e.g. 5K Under 25:00"></div>
+        <div class="field"><label>Category</label>
+          <select id="gfCategory">
+            <option>Running</option><option>Strength</option><option>Body</option><option>Consistency</option><option>Other</option>
+          </select>
+        </div>
+        <div class="field"><label>Unit</label>
+          <select id="gfUnit">
+            <option value="kg">kg</option><option value="km">km</option><option value="%">%</option>
+            <option value="min:sec">Time (min:sec)</option><option value="reps">reps</option><option value="">No unit</option>
+          </select>
+        </div>
+        <div class="field"><label>Direction</label>
+          <select id="gfDirection">
+            <option value="higher">Higher is better (e.g. strength, distance)</option>
+            <option value="lower">Lower is better (e.g. race time)</option>
+          </select>
+        </div>
+        <div class="field"><label>Current Value</label><input id="gfCurrent" type="text" placeholder="e.g. 100 or 27:32"></div>
+        <div class="field"><label>Target Value</label><input id="gfTarget" type="text" placeholder="e.g. 120 or 24:59"></div>
+        <div class="field"><label>Designation</label>
+          <select id="gfDesignation">
+            <option value="secondary">Secondary Goal</option>
+            <option value="primary">Primary Goal</option>
+          </select>
+        </div>
+        <div class="field"><label>Target Date (optional)</label><input id="gfDeadline" type="date"></div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn" id="gfSaveBtn" style="flex:1;">Add Goal</button>
+        <button class="btn secondary" id="gfCancelBtn" style="display:none;">Cancel Edit</button>
+      </div>
+      <p class="muted" id="gfMsg" style="margin-top:8px;font-size:12px;color:var(--red);"></p>
+    </div>
+
+    ${primary ? `<h3 style="margin-bottom:2px;">Primary</h3>${goalCardHTML(primary)}` : ''}
+    ${secondary.length ? `<h3 style="margin:18px 0 2px;">Secondary</h3>${secondary.map(goalCardHTML).join('')}` : ''}
+    ${!active.length ? `<div class="card" style="text-align:center;padding:32px 16px;"><p class="muted">No active goals yet — add one above to start tracking progress.</p></div>` : ''}
+
+    ${completed.length ? `
+      <h3 style="margin:24px 0 2px;">Completed</h3>
+      ${completed.map(g=>`
+        <div class="card" style="margin-bottom:10px;opacity:.75;">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div><span class="tag green">COMPLETED</span> <b style="margin-left:8px;">${g.name}</b></div>
+            <div class="goal-card-actions" style="margin-top:0;">
+              <button data-reactivategoal="${g.id}">Reactivate</button>
+              <button class="danger" data-deletegoal="${g.id}">Delete</button>
+            </div>
+          </div>
+        </div>`).join('')}
+    ` : ''}
+  `;
+
+  // --- Add/Edit form wiring ---
+  function resetForm(){
+    document.getElementById('gfEditId').value = '';
+    document.getElementById('gfName').value = '';
+    document.getElementById('gfCategory').value = 'Running';
+    document.getElementById('gfUnit').value = 'kg';
+    document.getElementById('gfDirection').value = 'higher';
+    document.getElementById('gfCurrent').value = '';
+    document.getElementById('gfTarget').value = '';
+    document.getElementById('gfDesignation').value = 'secondary';
+    document.getElementById('gfDeadline').value = '';
+    document.getElementById('goalFormTitle').textContent = 'Add a Goal';
+    document.getElementById('gfSaveBtn').textContent = 'Add Goal';
+    document.getElementById('gfCancelBtn').style.display = 'none';
+    document.getElementById('gfMsg').textContent = '';
+  }
+
+  function parseValueInput(raw, unit){
+    if(unit === 'min:sec'){
+      const secs = parseTimeToSeconds(raw);
+      return secs===null ? null : secs;
+    }
+    const n = parseFloat(raw);
+    return isNaN(n) ? null : n;
+  }
+
+  document.getElementById('gfSaveBtn').addEventListener('click', async ()=>{
+    const msg = document.getElementById('gfMsg');
+    const name = document.getElementById('gfName').value.trim();
+    const category = document.getElementById('gfCategory').value;
+    const unit = document.getElementById('gfUnit').value;
+    const direction = document.getElementById('gfDirection').value;
+    const currentRaw = document.getElementById('gfCurrent').value.trim();
+    const targetRaw = document.getElementById('gfTarget').value.trim();
+    const designation = document.getElementById('gfDesignation').value;
+    const deadline = document.getElementById('gfDeadline').value;
+    const editId = document.getElementById('gfEditId').value;
+
+    if(!name){ msg.textContent = 'Give the goal a name.'; return; }
+    const currentValue = parseValueInput(currentRaw, unit);
+    const targetValue = parseValueInput(targetRaw, unit);
+    if(currentValue===null || targetValue===null){
+      msg.textContent = unit==='min:sec' ? 'Enter times as MM:SS, e.g. 27:32.' : 'Enter valid numbers for current and target.';
+      return;
+    }
+
+    let allGoals = await getJSON('training-goals', []);
+    if(designation === 'primary'){
+      // Only one Primary at a time — demote any existing one to Secondary rather than allowing two
+      allGoals = allGoals.map(g => g.designation==='primary' ? {...g, designation:'secondary'} : g);
+    }
+
+    if(editId){
+      allGoals = allGoals.map(g => g.id===editId ? {
+        ...g, name, category, unit, direction, currentValue, targetValue, designation, deadline,
+      } : g);
+    } else {
+      allGoals.push({
+        id: 'goal-'+Date.now()+'-'+Math.random().toString(36).slice(2,7),
+        name, category, unit, direction,
+        startValue: currentValue, // baseline for progress math — fixed at creation time, never changes
+        currentValue, targetValue, designation, deadline,
+        createdDate: todayKey(), status: 'active',
+      });
+    }
+    await setJSON('training-goals', allGoals);
+    renderTrainingGoals();
+  });
+
+  document.getElementById('gfCancelBtn').addEventListener('click', resetForm);
+
+  el.querySelectorAll('[data-editgoal]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const g = goals.find(x=>x.id===btn.dataset.editgoal);
+      if(!g) return;
+      document.getElementById('gfEditId').value = g.id;
+      document.getElementById('gfName').value = g.name;
+      document.getElementById('gfCategory').value = g.category;
+      document.getElementById('gfUnit').value = g.unit;
+      document.getElementById('gfDirection').value = g.direction;
+      document.getElementById('gfCurrent').value = g.unit==='min:sec' ? formatSecondsToTime(g.currentValue) : g.currentValue;
+      document.getElementById('gfTarget').value = g.unit==='min:sec' ? formatSecondsToTime(g.targetValue) : g.targetValue;
+      document.getElementById('gfDesignation').value = g.designation;
+      document.getElementById('gfDeadline').value = g.deadline || '';
+      document.getElementById('goalFormTitle').textContent = 'Edit Goal';
+      document.getElementById('gfSaveBtn').textContent = 'Save Changes';
+      document.getElementById('gfCancelBtn').style.display = '';
+      document.getElementById('gfMsg').textContent = '';
+      el.scrollIntoView({behavior:'smooth', block:'start'});
+    });
+  });
+
+  el.querySelectorAll('[data-setprimary]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      let allGoals = await getJSON('training-goals', []);
+      allGoals = allGoals.map(g => ({...g, designation: g.id===btn.dataset.setprimary ? 'primary' : (g.designation==='primary' ? 'secondary' : g.designation)}));
+      await setJSON('training-goals', allGoals);
+      renderTrainingGoals();
+    });
+  });
+
+  el.querySelectorAll('[data-completegoal]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      let allGoals = await getJSON('training-goals', []);
+      allGoals = allGoals.map(g => g.id===btn.dataset.completegoal ? {...g, status:'completed'} : g);
+      await setJSON('training-goals', allGoals);
+      renderTrainingGoals();
+    });
+  });
+
+  el.querySelectorAll('[data-reactivategoal]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      let allGoals = await getJSON('training-goals', []);
+      allGoals = allGoals.map(g => g.id===btn.dataset.reactivategoal ? {...g, status:'active'} : g);
+      await setJSON('training-goals', allGoals);
+      renderTrainingGoals();
+    });
+  });
+
+  // Delete uses an inline two-step confirm (this app avoids confirm()/alert() — they're blocked in
+  // the sandboxed preview and inconsistent across the installed PWA) rather than deleting on one tap.
+  el.querySelectorAll('[data-deletegoal]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      if(btn.dataset.confirming !== 'true'){
+        btn.dataset.confirming = 'true';
+        btn.textContent = 'Confirm Delete?';
+        setTimeout(()=>{ if(btn.dataset.confirming==='true'){ btn.dataset.confirming='false'; btn.textContent='Delete'; } }, 3000);
+        return;
+      }
+      let allGoals = await getJSON('training-goals', []);
+      allGoals = allGoals.filter(g => g.id !== btn.dataset.deletegoal);
+      await setJSON('training-goals', allGoals);
+      renderTrainingGoals();
+    });
+  });
+}
+
 async function renderOverview(){
   const el = document.getElementById('view-overview');
   const profile = await getJSON('profile', {weight:72});
