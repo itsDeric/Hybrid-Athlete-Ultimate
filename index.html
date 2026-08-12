@@ -186,6 +186,20 @@ td.num,th.num{font-family:var(--mono);}
 .goal-card-actions button.primary-action{color:var(--blue);border-color:var(--blue-dim);}
 .goal-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 @media (max-width:600px){ .goal-form-grid{grid-template-columns:1fr;} } /* form fields with long option text (e.g. "Higher is better (e.g. strength, distance)") get cramped in 2 columns on narrow phones — stack instead */
+/* Goal creation: chip-based category/metric selection instead of dropdowns — makes each step read as
+   a single clear decision ("what do I want to achieve") rather than a form field to fill in. */
+.goal-step-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;color:var(--gray-600);margin:18px 0 8px;}
+.goal-step-label:first-child{margin-top:0;}
+.goal-chip-row{display:flex;flex-wrap:wrap;gap:8px;}
+.goal-chip{background:#fff;border:1.5px solid var(--gray-200);border-radius:12px;padding:10px 16px;font-size:13.5px;font-weight:600;color:var(--ink);cursor:pointer;min-height:44px;transition:border-color .15s,background .15s,color .15s;}
+.goal-chip:hover{border-color:var(--gray-400);}
+.goal-chip.selected{background:var(--blue);border-color:var(--blue);color:#fff;}
+.goal-time-row{display:flex;align-items:center;gap:8px;}
+.goal-time-row .field{flex:1;}
+.goal-time-colon{font-size:20px;font-weight:700;color:var(--gray-400);margin-top:18px;}
+.goal-value-suffix{display:flex;align-items:center;gap:8px;}
+.goal-value-suffix input{flex:1;}
+.goal-value-suffix span{font-size:13px;color:var(--gray-600);font-weight:600;min-width:fit-content;}
 .tag.gray{background:var(--gray-100);color:var(--gray-600);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
@@ -1296,6 +1310,45 @@ async function renderProfile(){
    its own 'training-goals' key (an array), using the same getJSON/setJSON persistence already used
    everywhere else — not a new storage system. */
 
+// The goal catalog is the single source of truth for "what can this metric mean" — unit, how the
+// value should be entered, and which direction counts as progress. The UI asks the athlete WHAT they
+// want to achieve (category → metric) and reads everything else from here, instead of asking them to
+// separately configure unit/direction like database fields. New metrics just get added here; nothing
+// else in the form needs to change to support them.
+//   valueType: 'time' (separate min/sec inputs) | 'number' (plain numeric, shown with unit)
+//   direction: 'higher' | 'lower' | 'auto' (auto = inferred from current vs target at save time —
+//              used for goals like body weight where either loss or gain is a legitimate goal)
+const GOAL_CATALOG = {
+  Running: [
+    { id:'5k_time', label:'5K Time', unit:'min:sec', valueType:'time', direction:'lower' },
+    { id:'10k_time', label:'10K Time', unit:'min:sec', valueType:'time', direction:'lower' },
+    { id:'half_time', label:'Half Marathon Time', unit:'min:sec', valueType:'time', direction:'lower' },
+    { id:'weekly_distance', label:'Weekly Distance', unit:'km', valueType:'number', direction:'higher' },
+    { id:'longest_run', label:'Longest Single Run', unit:'km', valueType:'number', direction:'higher' },
+  ],
+  Strength: [
+    { id:'squat', label:'Squat', unit:'kg', valueType:'number', direction:'higher' },
+    { id:'bench', label:'Bench Press', unit:'kg', valueType:'number', direction:'higher' },
+    { id:'deadlift', label:'Deadlift', unit:'kg', valueType:'number', direction:'higher' },
+    { id:'ohp', label:'Overhead Press', unit:'kg', valueType:'number', direction:'higher' },
+    { id:'pullups', label:'Max Pull-ups', unit:'reps', valueType:'number', direction:'higher' },
+  ],
+  Body: [
+    { id:'bodyweight', label:'Body Weight', unit:'kg', valueType:'number', direction:'auto' },
+    { id:'bodyfat', label:'Body Fat %', unit:'%', valueType:'number', direction:'lower' },
+  ],
+  Consistency: [
+    { id:'adherence', label:'Training Consistency', unit:'%', valueType:'number', direction:'higher' },
+    { id:'streak', label:'Weekly Session Streak', unit:'weeks', valueType:'number', direction:'higher' },
+  ],
+  Other: [
+    { id:'custom', label:'Custom Goal', unit:'', valueType:'number', direction:'higher', customizable:true },
+  ],
+};
+function findGoalMetric(category, metricId){
+  return (GOAL_CATALOG[category]||[]).find(m=>m.id===metricId) || null;
+}
+
 // Time goals (e.g. a 5K finish time) are entered as MM:SS but stored as total seconds internally, so
 // progress math stays on plain numbers rather than needing separate time-parsing logic at calc time.
 function parseTimeToSeconds(str){
@@ -1367,41 +1420,41 @@ async function renderTrainingGoals(){
 
     <div class="card" style="margin-bottom:20px;">
       <h3 id="goalFormTitle">Add a Goal</h3>
+      <p class="muted" style="margin-top:2px;">Tell us what you want to achieve — we'll figure out the units and how progress is measured.</p>
       <input type="hidden" id="gfEditId" value="">
-      <div class="goal-form-grid" style="margin-top:12px;">
-        <div class="field"><label>Goal Name</label><input id="gfName" type="text" placeholder="e.g. 5K Under 25:00"></div>
-        <div class="field"><label>Category</label>
-          <select id="gfCategory">
-            <option>Running</option><option>Strength</option><option>Body</option><option>Consistency</option><option>Other</option>
-          </select>
-        </div>
-        <div class="field"><label>Unit</label>
-          <select id="gfUnit">
-            <option value="kg">kg</option><option value="km">km</option><option value="%">%</option>
-            <option value="min:sec">Time (min:sec)</option><option value="reps">reps</option><option value="">No unit</option>
-          </select>
-        </div>
-        <div class="field"><label>Direction</label>
-          <select id="gfDirection">
-            <option value="higher">Higher is better (e.g. strength, distance)</option>
-            <option value="lower">Lower is better (e.g. race time)</option>
-          </select>
-        </div>
-        <div class="field"><label>Current Value</label><input id="gfCurrent" type="text" placeholder="e.g. 100 or 27:32"></div>
-        <div class="field"><label>Target Value</label><input id="gfTarget" type="text" placeholder="e.g. 120 or 24:59"></div>
-        <div class="field"><label>Designation</label>
-          <select id="gfDesignation">
-            <option value="secondary">Secondary Goal</option>
-            <option value="primary">Primary Goal</option>
-          </select>
-        </div>
-        <div class="field"><label>Target Date (optional)</label><input id="gfDeadline" type="date"></div>
+
+      <div class="goal-step-label">1. What kind of goal?</div>
+      <div class="goal-chip-row" id="gfCategoryChips">
+        ${Object.keys(GOAL_CATALOG).map(cat=>`<button class="goal-chip" data-category="${cat}">${cat}</button>`).join('')}
       </div>
-      <div style="display:flex;gap:10px;margin-top:14px;">
-        <button class="btn" id="gfSaveBtn" style="flex:1;">Add Goal</button>
-        <button class="btn secondary" id="gfCancelBtn" style="display:none;">Cancel Edit</button>
+
+      <div id="gfMetricStep" style="display:none;">
+        <div class="goal-step-label">2. Which metric?</div>
+        <div class="goal-chip-row" id="gfMetricChips"></div>
       </div>
-      <p class="muted" id="gfMsg" style="margin-top:8px;font-size:12px;color:var(--red);"></p>
+
+      <div id="gfDetailsStep" style="display:none;">
+        <div class="goal-step-label" id="gfCustomLabel" style="display:none;">Goal Name</div>
+        <div class="field" id="gfCustomNameField" style="display:none;margin-bottom:4px;"><input id="gfName" type="text" placeholder="e.g. Handstand hold"></div>
+
+        <div class="goal-step-label">3. Current &amp; target</div>
+        <div id="gfValueInputs"></div>
+
+        <div class="goal-step-label">4. Target date (optional)</div>
+        <div class="field" style="max-width:220px;"><input id="gfDeadline" type="date"></div>
+
+        <div class="goal-step-label">5. Priority</div>
+        <div class="goal-chip-row">
+          <button class="goal-chip selected" data-designation="secondary">Secondary Goal</button>
+          <button class="goal-chip" data-designation="primary">Primary Goal</button>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:18px;">
+          <button class="btn" id="gfSaveBtn" style="flex:1;">Add Goal</button>
+          <button class="btn secondary" id="gfCancelBtn" style="display:none;">Cancel Edit</button>
+        </div>
+        <p class="muted" id="gfMsg" style="margin-top:8px;font-size:12px;color:var(--red);"></p>
+      </div>
     </div>
 
     ${primary ? `<h3 style="margin-bottom:2px;">Primary</h3>${goalCardHTML(primary)}` : ''}
@@ -1423,68 +1476,160 @@ async function renderTrainingGoals(){
     ` : ''}
   `;
 
-  // --- Add/Edit form wiring ---
+  // --- Add/Edit form wiring (chip-based flow: category → metric → contextual value inputs) ---
+  let gfState = { category:null, metricId:null, editId:'', designation:'secondary' };
+
+  function renderValueInputs(metric, current, target){
+    const box = document.getElementById('gfValueInputs');
+    if(!metric){ box.innerHTML = ''; return; }
+    if(metric.valueType === 'time'){
+      const cur = current!=null ? {m:Math.floor(current/60), s:current%60} : {m:'',s:''};
+      const tgt = target!=null ? {m:Math.floor(target/60), s:target%60} : {m:'',s:''};
+      box.innerHTML = `
+        <div class="field" style="margin-bottom:4px;"><label>Current</label></div>
+        <div class="goal-time-row" style="margin-bottom:14px;">
+          <div class="field"><input id="gfCurrentMin" type="number" min="0" placeholder="Min" value="${cur.m}"></div>
+          <div class="goal-time-colon">:</div>
+          <div class="field"><input id="gfCurrentSec" type="number" min="0" max="59" placeholder="Sec" value="${cur.s}"></div>
+        </div>
+        <div class="field" style="margin-bottom:4px;"><label>Target</label></div>
+        <div class="goal-time-row">
+          <div class="field"><input id="gfTargetMin" type="number" min="0" placeholder="Min" value="${tgt.m}"></div>
+          <div class="goal-time-colon">:</div>
+          <div class="field"><input id="gfTargetSec" type="number" min="0" max="59" placeholder="Sec" value="${tgt.s}"></div>
+        </div>`;
+    } else {
+      box.innerHTML = `
+        <div class="goal-form-grid">
+          <div class="field"><label>Current${metric.unit?` (${metric.unit})`:''}</label>
+            <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
+          </div>
+          <div class="field"><label>Target${metric.unit?` (${metric.unit})`:''}</label>
+            <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
+          </div>
+        </div>
+        ${metric.customizable ? `
+        <div class="goal-form-grid" style="margin-top:12px;">
+          <div class="field"><label>Unit (optional)</label><input id="gfCustomUnit" type="text" placeholder="e.g. reps, cm" value="${metric.unit||''}"></div>
+          <div class="field"><label>Direction</label>
+            <select id="gfCustomDirection">
+              <option value="higher">Higher is better</option>
+              <option value="lower">Lower is better</option>
+            </select>
+          </div>
+        </div>` : ''}
+      `;
+    }
+  }
+
+  function renderMetricChips(){
+    const wrap = document.getElementById('gfMetricChips');
+    const metrics = GOAL_CATALOG[gfState.category] || [];
+    wrap.innerHTML = metrics.map(m=>`<button class="goal-chip" data-metric="${m.id}">${m.label}</button>`).join('');
+    wrap.querySelectorAll('[data-metric]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        wrap.querySelectorAll('[data-metric]').forEach(b=>b.classList.remove('selected'));
+        btn.classList.add('selected');
+        gfState.metricId = btn.dataset.metric;
+        const metric = findGoalMetric(gfState.category, gfState.metricId);
+        document.getElementById('gfDetailsStep').style.display = '';
+        const isCustom = !!metric.customizable;
+        document.getElementById('gfCustomLabel').style.display = isCustom ? '' : 'none';
+        document.getElementById('gfCustomNameField').style.display = isCustom ? '' : 'none';
+        renderValueInputs(metric);
+      });
+    });
+  }
+
   function resetForm(){
+    gfState = { category:null, metricId:null, editId:'', designation:'secondary' };
     document.getElementById('gfEditId').value = '';
-    document.getElementById('gfName').value = '';
-    document.getElementById('gfCategory').value = 'Running';
-    document.getElementById('gfUnit').value = 'kg';
-    document.getElementById('gfDirection').value = 'higher';
-    document.getElementById('gfCurrent').value = '';
-    document.getElementById('gfTarget').value = '';
-    document.getElementById('gfDesignation').value = 'secondary';
     document.getElementById('gfDeadline').value = '';
+    document.getElementById('gfName').value = '';
+    document.querySelectorAll('#gfCategoryChips [data-category]').forEach(b=>b.classList.remove('selected'));
+    document.getElementById('gfMetricChips').innerHTML = '';
+    document.getElementById('gfMetricStep').style.display = 'none';
+    document.getElementById('gfDetailsStep').style.display = 'none';
+    document.querySelectorAll('#gfDetailsStep [data-designation]').forEach(b=>b.classList.toggle('selected', b.dataset.designation==='secondary'));
     document.getElementById('goalFormTitle').textContent = 'Add a Goal';
     document.getElementById('gfSaveBtn').textContent = 'Add Goal';
     document.getElementById('gfCancelBtn').style.display = 'none';
     document.getElementById('gfMsg').textContent = '';
   }
 
-  function parseValueInput(raw, unit){
-    if(unit === 'min:sec'){
-      const secs = parseTimeToSeconds(raw);
-      return secs===null ? null : secs;
+  document.querySelectorAll('#gfCategoryChips [data-category]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('#gfCategoryChips [data-category]').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      gfState.category = btn.dataset.category;
+      gfState.metricId = null;
+      document.getElementById('gfMetricStep').style.display = '';
+      document.getElementById('gfDetailsStep').style.display = 'none';
+      renderMetricChips();
+    });
+  });
+
+  document.querySelectorAll('#gfDetailsStep [data-designation]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('#gfDetailsStep [data-designation]').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      gfState.designation = btn.dataset.designation;
+    });
+  });
+
+  function readValueInputs(metric){
+    if(metric.valueType === 'time'){
+      const cm = parseInt(document.getElementById('gfCurrentMin').value);
+      const cs = parseInt(document.getElementById('gfCurrentSec').value);
+      const tm = parseInt(document.getElementById('gfTargetMin').value);
+      const ts = parseInt(document.getElementById('gfTargetSec').value);
+      if(isNaN(cm)||isNaN(cs)||isNaN(tm)||isNaN(ts)) return null;
+      return { currentValue: cm*60+cs, targetValue: tm*60+ts, unit:'min:sec' };
     }
-    const n = parseFloat(raw);
-    return isNaN(n) ? null : n;
+    const currentValue = parseFloat(document.getElementById('gfCurrentVal').value);
+    const targetValue = parseFloat(document.getElementById('gfTargetVal').value);
+    if(isNaN(currentValue) || isNaN(targetValue)) return null;
+    let unit = metric.unit, direction = metric.direction;
+    if(metric.customizable){
+      unit = document.getElementById('gfCustomUnit').value.trim();
+      direction = document.getElementById('gfCustomDirection').value;
+    }
+    return { currentValue, targetValue, unit, direction };
   }
 
   document.getElementById('gfSaveBtn').addEventListener('click', async ()=>{
     const msg = document.getElementById('gfMsg');
-    const name = document.getElementById('gfName').value.trim();
-    const category = document.getElementById('gfCategory').value;
-    const unit = document.getElementById('gfUnit').value;
-    const direction = document.getElementById('gfDirection').value;
-    const currentRaw = document.getElementById('gfCurrent').value.trim();
-    const targetRaw = document.getElementById('gfTarget').value.trim();
-    const designation = document.getElementById('gfDesignation').value;
+    const metric = findGoalMetric(gfState.category, gfState.metricId);
+    if(!metric){ msg.textContent = 'Pick a category and a metric first.'; return; }
+    if(metric.customizable && !document.getElementById('gfName').value.trim()){ msg.textContent = 'Give the goal a name.'; return; }
+    const vals = readValueInputs(metric);
+    if(!vals){ msg.textContent = metric.valueType==='time' ? 'Enter minutes and seconds for both current and target.' : 'Enter valid numbers for current and target.'; return; }
+    const { currentValue, targetValue } = vals;
+    const unit = vals.unit;
+    // 'auto' direction (e.g. body weight, where either loss or gain is a legitimate goal) is inferred
+    // from which way the athlete is actually trying to move, rather than asked as a separate field.
+    let direction = vals.direction;
+    if(direction === 'auto') direction = targetValue < currentValue ? 'lower' : 'higher';
+    const name = metric.customizable ? document.getElementById('gfName').value.trim() : metric.label;
     const deadline = document.getElementById('gfDeadline').value;
-    const editId = document.getElementById('gfEditId').value;
-
-    if(!name){ msg.textContent = 'Give the goal a name.'; return; }
-    const currentValue = parseValueInput(currentRaw, unit);
-    const targetValue = parseValueInput(targetRaw, unit);
-    if(currentValue===null || targetValue===null){
-      msg.textContent = unit==='min:sec' ? 'Enter times as MM:SS, e.g. 27:32.' : 'Enter valid numbers for current and target.';
-      return;
-    }
+    const editId = gfState.editId;
 
     let allGoals = await getJSON('training-goals', []);
-    if(designation === 'primary'){
+    if(gfState.designation === 'primary'){
       // Only one Primary at a time — demote any existing one to Secondary rather than allowing two
       allGoals = allGoals.map(g => g.designation==='primary' ? {...g, designation:'secondary'} : g);
     }
-
     if(editId){
       allGoals = allGoals.map(g => g.id===editId ? {
-        ...g, name, category, unit, direction, currentValue, targetValue, designation, deadline,
+        ...g, name, category: gfState.category, metricId: gfState.metricId, unit, direction,
+        currentValue, targetValue, designation: gfState.designation, deadline,
       } : g);
     } else {
       allGoals.push({
         id: 'goal-'+Date.now()+'-'+Math.random().toString(36).slice(2,7),
-        name, category, unit, direction,
+        name, category: gfState.category, metricId: gfState.metricId, unit, direction,
         startValue: currentValue, // baseline for progress math — fixed at creation time, never changes
-        currentValue, targetValue, designation, deadline,
+        currentValue, targetValue, designation: gfState.designation, deadline,
         createdDate: todayKey(), status: 'active',
       });
     }
@@ -1498,15 +1643,32 @@ async function renderTrainingGoals(){
     btn.addEventListener('click', ()=>{
       const g = goals.find(x=>x.id===btn.dataset.editgoal);
       if(!g) return;
-      document.getElementById('gfEditId').value = g.id;
-      document.getElementById('gfName').value = g.name;
-      document.getElementById('gfCategory').value = g.category;
-      document.getElementById('gfUnit').value = g.unit;
-      document.getElementById('gfDirection').value = g.direction;
-      document.getElementById('gfCurrent').value = g.unit==='min:sec' ? formatSecondsToTime(g.currentValue) : g.currentValue;
-      document.getElementById('gfTarget').value = g.unit==='min:sec' ? formatSecondsToTime(g.targetValue) : g.targetValue;
-      document.getElementById('gfDesignation').value = g.designation;
+      // Goals created before this chip-based redesign won't have a metricId — fall back to the
+      // "Custom Goal" metric so editing them still works, just without a catalog match.
+      gfState.editId = g.id;
+      gfState.category = GOAL_CATALOG[g.category] ? g.category : 'Other';
+      gfState.metricId = (g.metricId && findGoalMetric(gfState.category, g.metricId)) ? g.metricId : 'custom';
+      gfState.designation = g.designation;
+
+      document.querySelectorAll('#gfCategoryChips [data-category]').forEach(b=>b.classList.toggle('selected', b.dataset.category===gfState.category));
+      document.getElementById('gfMetricStep').style.display = '';
+      renderMetricChips();
+      const metricBtn = document.querySelector(`#gfMetricChips [data-metric="${gfState.metricId}"]`);
+      if(metricBtn) metricBtn.classList.add('selected');
+
+      const metric = findGoalMetric(gfState.category, gfState.metricId) || GOAL_CATALOG.Other[0];
+      document.getElementById('gfDetailsStep').style.display = '';
+      const isCustom = !!metric.customizable;
+      document.getElementById('gfCustomLabel').style.display = isCustom ? '' : 'none';
+      document.getElementById('gfCustomNameField').style.display = isCustom ? '' : 'none';
+      if(isCustom) document.getElementById('gfName').value = g.name;
+      renderValueInputs(metric, g.currentValue, g.targetValue);
+      if(isCustom){
+        document.getElementById('gfCustomUnit').value = g.unit || '';
+        document.getElementById('gfCustomDirection').value = g.direction === 'lower' ? 'lower' : 'higher';
+      }
       document.getElementById('gfDeadline').value = g.deadline || '';
+      document.querySelectorAll('#gfDetailsStep [data-designation]').forEach(b=>b.classList.toggle('selected', b.dataset.designation===g.designation));
       document.getElementById('goalFormTitle').textContent = 'Edit Goal';
       document.getElementById('gfSaveBtn').textContent = 'Save Changes';
       document.getElementById('gfCancelBtn').style.display = '';
