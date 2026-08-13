@@ -1163,6 +1163,57 @@ function buildMain(){
    etc.) to read from instead of maintaining duplicate athlete info. Lives under the same 'profile'
    key that already stored { weight } — this is a purely additive extension of that existing object,
    not a new storage system. See getAthleteProfile()/saveAthleteProfile() below for the shared shape. */
+/* ---------- BODY WEIGHT: SINGLE SOURCE OF TRUTH ----------
+   Architecture repair A1: body weight previously existed as three uncoordinated values —
+   profile.weight, the latest weight-log entry, and (separately, untouched by this repair) a Training
+   Goal's currentValue. weight-log is now the sole authority; profile.weight is never independently
+   written or trusted again. Every screen that shows or edits "current weight" goes through
+   getCurrentWeight()/recordWeight() below, so there is exactly one place a weight measurement lives. */
+async function getCurrentWeight(){
+  const log = await getJSON('weight-log', []);
+  if(log.length){
+    // Latest by date; same-day ties broken by insertion order (chronological), not by re-sorting —
+    // same reasoning as the earlier "Last time" session-history fix.
+    let latest = log[0];
+    log.forEach(e=>{ if(e.date >= latest.date) latest = e; });
+    return latest.weight;
+  }
+  // No weight-log yet (brand new user, or migration hasn't run this session) — fall back to whatever
+  // profile.weight holds, defaulting to 72 for a genuinely fresh install.
+  const profile = await getJSON('profile', {});
+  return profile.weight || 72;
+}
+
+// Canonical way to record a body-weight measurement — the only function that should ever write a
+// weight value anywhere in the app. Updates today's entry in place rather than appending a duplicate
+// if one already exists for the same date, since Overview/Nutrition/Profile's quick-edit controls are
+// meant to correct "today's" weight, not log multiple measurements per day.
+async function recordWeight(value, date){
+  date = date || todayKey();
+  const log = await getJSON('weight-log', []);
+  const idx = log.findIndex(e=>e.date===date);
+  if(idx >= 0) log[idx] = {date, weight:value};
+  else log.push({date, weight:value});
+  await setJSON('weight-log', log);
+}
+
+// One-time migration: an existing user may have profile.weight but have never logged anything in
+// weight-log (this repair predates weight-log being the authority). Seed weight-log with that value
+// so it isn't lost — but only if weight-log is genuinely empty, and only ever once, so it can never
+// overwrite real history or re-run on every load.
+async function migrateProfileWeightToLog(){
+  const done = await getJSON('weight-log-migrated', false);
+  if(done) return;
+  const log = await getJSON('weight-log', []);
+  if(log.length === 0){
+    const profile = await getJSON('profile', {});
+    if(profile.weight){
+      await setJSON('weight-log', [{date: todayKey(), weight: profile.weight}]);
+    }
+  }
+  await setJSON('weight-log-migrated', true);
+}
+
 const PROFILE_DEFAULTS = {
   weight: 72, name:'', age:'', gender:'', height:'',
   experience:'', daysPerWeek:'', sessionMinutes:'', equipment:'',
@@ -1170,11 +1221,18 @@ const PROFILE_DEFAULTS = {
 };
 async function getAthleteProfile(){
   const saved = await getJSON('profile', {});
-  return { ...PROFILE_DEFAULTS, ...saved };
+  const weight = await getCurrentWeight(); // always derived — never trust a stored profile.weight directly
+  return { ...PROFILE_DEFAULTS, ...saved, weight };
 }
 async function saveAthleteProfile(patch){
   const current = await getAthleteProfile();
-  await setJSON('profile', { ...current, ...patch });
+  const { weight, ...rest } = patch;
+  if(weight !== undefined && weight !== '' && weight !== current.weight){
+    await recordWeight(weight); // weight changes always go through the authoritative log, never the profile blob
+  }
+  const merged = { ...current, ...rest };
+  delete merged.weight; // never persist weight inside 'profile' — weight-log is the only source of truth
+  await setJSON('profile', merged);
 }
 
 async function renderProfile(){
@@ -1724,7 +1782,7 @@ async function renderTrainingGoals(){
 
 async function renderOverview(){
   const el = document.getElementById('view-overview');
-  const profile = await getJSON('profile', {weight:72});
+  const profile = { weight: await getCurrentWeight() }; // A1: weight-log is authoritative, not a raw profile read
 
   const activeId = await getJSON('active-program', null);
   const customPrograms = await getJSON('custom-programs', []);
@@ -1883,7 +1941,7 @@ async function renderOverview(){
   });
   document.getElementById('ovWeightSave').addEventListener('click', async ()=>{
     const w = parseFloat(document.getElementById('ovWeightInput').value) || profile.weight;
-    await setJSON('profile', {...profile, weight:w}); // merge, not overwrite — profile now holds more than just weight
+    await recordWeight(w); // A1: goes straight to weight-log, the single authority — never touches 'profile'
     renderOverview();
     renderNutrition();
     renderCheat();
@@ -3180,7 +3238,7 @@ async function renderRunningGoalPlan(el, goal){
 /* ---------- NUTRITION ---------- */
 async function renderNutrition(){
   const el = document.getElementById('view-nutrition');
-  const profile = await getJSON('profile', {weight:72});
+  const profile = { weight: await getCurrentWeight() }; // A1: weight-log is authoritative
 
   const activeId = await getJSON('active-program', null);
   let activeProg = null;
@@ -3227,7 +3285,7 @@ async function renderNutrition(){
   renderMacros(profile.weight);
   document.getElementById('nutUpdate').addEventListener('click', async ()=>{
     const w = parseFloat(document.getElementById('nutWeight').value)||60;
-    await setJSON('profile', {...profile, weight:w}); // merge, not overwrite
+    await recordWeight(w); // A1: goes straight to weight-log — never touches 'profile'
     renderMacros(w);
     renderCheat();
   });
@@ -3820,8 +3878,7 @@ async function renderProgressCharts(wLog, bLog, pLog, retryCount){
 /* ---------- CHEAT SHEET ---------- */
 async function renderCheat(){
   const el = document.getElementById('view-cheat');
-  const profile = await getJSON('profile', {weight:72});
-  const w = profile.weight;
+  const w = await getCurrentWeight(); // A1: weight-log is authoritative
   const todayName = new Date().toLocaleDateString('en-US',{weekday:'long'});
   const habitState = await getJSON('habits:'+todayKey(), {});
 
@@ -4028,7 +4085,7 @@ async function maybeShowOnboarding(){
    INIT
 ============================================================ */
 renderNav();
-migrateToSharedExerciseWeights().then(()=> backfillPRs()).then(()=>{
+migrateToSharedExerciseWeights().then(()=> backfillPRs()).then(()=> migrateProfileWeightToLog()).then(()=>{
   buildMain();
   renderCountdown();
   // Establish the initial view (respecting a bookmarked/shared URL hash if present) — showView()
