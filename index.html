@@ -1407,6 +1407,57 @@ function findGoalMetric(category, metricId){
   return (GOAL_CATALOG[category]||[]).find(m=>m.id===metricId) || null;
 }
 
+/* ---------- ARCHITECTURE REPAIR A2: goal current-value resolver ----------
+   Goal TARGET is always user intent and is never touched here. Goal CURRENT VALUE is resolved fresh
+   from existing authoritative data on every render for metrics where that mapping is unambiguous —
+   never persisted back into the stored goal, so it can never fall out of sync or need an update hook
+   scattered elsewhere. Metrics without a safe, exact data source return null and the caller falls
+   back to the goal's own manually-maintained currentValue.
+
+   Classification (verified against the actual exercise/activity data in this codebase, not assumed):
+   🟢 AUTO — Body/bodyweight (weight-log, via A1's getCurrentWeight), Running/weekly_distance and
+      Running/longest_run (pure aggregates of pace-log with no interpretation risk), Strength/bench,
+      Strength/deadlift, Strength/pullups (exercise-weights, but ONLY because 'Bench Press',
+      'Deadlift', and 'Pull-ups' exist as exact, unambiguous exercise names in this app's programs).
+   🟡 MANUAL — Running/5k_time, 10k_time, half_time: pace-log has no race/effort tagging, so the
+      closest-distance entry could just as easily be an easy training run; treating it as a time-trial
+      result would be an unsafe inference, not a derivation. Strength/squat and Strength/ohp: no exact
+      "Squat" or "Overhead Press" exercise exists — only named variants (Back Squat/Front Squat/
+      Bulgarian Split Squat; Standing Overhead Press/Seated DB Shoulder Press/Arnold Press) with no
+      single correct pick. Body/bodyfat: measurements-log has no body-fat field at all. Consistency/
+      adherence and streak: no existing adherence or streak calculation exists anywhere to reuse, and
+      inventing one (what window? what counts?) would be a new feature, not a data connection.
+      Other/custom: free-form by definition, can never be mapped. */
+async function resolveGoalCurrentValue(goal){
+  const { category, metricId } = goal;
+
+  if(category === 'Body' && metricId === 'bodyweight'){
+    return await getCurrentWeight();
+  }
+
+  if(category === 'Running' && metricId === 'weekly_distance'){
+    const log = await getJSON('pace-log', []);
+    const cutoff = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
+    const total = log.filter(r=> r.date >= cutoff).reduce((sum,r)=> sum + (parseFloat(r.dist)||0), 0);
+    return log.length ? Math.round(total*10)/10 : null;
+  }
+
+  if(category === 'Running' && metricId === 'longest_run'){
+    const log = await getJSON('pace-log', []);
+    if(!log.length) return null;
+    return Math.max(...log.map(r=>parseFloat(r.dist)||0));
+  }
+
+  const STRENGTH_EXERCISE_MAP = { bench:'Bench Press', deadlift:'Deadlift', pullups:'Pull-ups' };
+  if(category === 'Strength' && STRENGTH_EXERCISE_MAP[metricId]){
+    const weights = await getAllExerciseWeights();
+    const w = weights[STRENGTH_EXERCISE_MAP[metricId]];
+    return w ? parseFloat(w) : null;
+  }
+
+  return null; // not safely derivable — caller uses the goal's own stored currentValue
+}
+
 // Time goals (e.g. a 5K finish time) are entered as MM:SS but stored as total seconds internally, so
 // progress math stays on plain numbers rather than needing separate time-parsing logic at calc time.
 function parseTimeToSeconds(str){
@@ -1445,8 +1496,21 @@ async function renderTrainingGoals(){
   const primary = active.find(g=>g.designation==='primary');
   const secondary = active.filter(g=>g.designation!=='primary');
 
+  // A2: resolve a live current value for every goal where it's safely derivable; goals without a safe
+  // source keep their own stored currentValue, untouched. Pre-computed here (can't await inside the
+  // template-building functions below) and never written back to storage — pure read, every render.
+  const resolvedMap = {}, autoMap = {};
+  for(const g of goals){
+    const resolved = await resolveGoalCurrentValue(g);
+    const hasValue = resolved !== null && resolved !== undefined;
+    resolvedMap[g.id] = hasValue ? resolved : g.currentValue;
+    autoMap[g.id] = hasValue;
+  }
+
   function goalCardHTML(g){
-    const pct = computeGoalProgress(g);
+    const effectiveCurrent = resolvedMap[g.id];
+    const isAuto = autoMap[g.id];
+    const pct = computeGoalProgress({...g, currentValue: effectiveCurrent});
     return `
     <div class="card goal-card" data-goalid="${g.id}" style="margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -1455,11 +1519,11 @@ async function renderTrainingGoals(){
       </div>
       <h3 style="margin-top:10px;">${g.name}</h3>
       <div class="grid g2" style="margin-top:10px;">
-        <div><div class="stat-label">Current</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.currentValue)}</div></div>
+        <div><div class="stat-label">Current${isAuto?' <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);font-size:9px;margin-left:4px;">LIVE</span>':''}</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, effectiveCurrent)}</div></div>
         <div><div class="stat-label">Target</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.targetValue)}</div></div>
       </div>
       <div class="goal-progress-track"><div class="goal-progress-fill${pct>=100?' complete':''}" style="width:${pct}%;"></div></div>
-      <p class="muted" style="margin-top:6px;font-size:12px;">${pct}% of the way to target${g.deadline?` · by ${g.deadline}`:''}</p>
+      <p class="muted" style="margin-top:6px;font-size:12px;">${pct}% of the way to target${g.deadline?` · by ${g.deadline}`:''}${isAuto?' · current value updates automatically from your logged activity':''}</p>
       <div class="goal-card-actions">
         <button data-editgoal="${g.id}">Edit</button>
         ${g.designation!=='primary'?`<button class="primary-action" data-setprimary="${g.id}">Set as Primary</button>`:''}
