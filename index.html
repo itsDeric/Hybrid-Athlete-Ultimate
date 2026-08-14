@@ -3018,7 +3018,10 @@ async function finishSessionMode(){
   // Route through history.back() rather than calling closeSessionMode() directly — otherwise the
   // "session open" history entry pushed when Session Mode started is left stranded on the stack,
   // and the next back-press would land on the wrong view instead of where the user actually was.
-  history.back();
+  // Must use window.history explicitly — the local `history` (the session-history array, declared
+  // above) shadows the global History API for the rest of this function's scope, so a bare
+  // `history.back()` throws "history.back is not a function" instead of navigating back.
+  window.history.back();
   renderGym();
   renderCheat();
   renderHabits();
