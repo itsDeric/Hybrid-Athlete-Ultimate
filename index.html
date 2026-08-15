@@ -1378,11 +1378,16 @@ async function renderProfile(){
 //              used for goals like body weight where either loss or gain is a legitimate goal)
 const GOAL_CATALOG = {
   Running: [
-    { id:'5k_time', label:'5K Time', unit:'min:sec', valueType:'time', direction:'lower' },
-    { id:'10k_time', label:'10K Time', unit:'min:sec', valueType:'time', direction:'lower' },
-    { id:'half_time', label:'Half Marathon Time', unit:'min:sec', valueType:'time', direction:'lower' },
-    { id:'weekly_distance', label:'Weekly Distance', unit:'km', valueType:'number', direction:'higher' },
-    { id:'longest_run', label:'Longest Single Run', unit:'km', valueType:'number', direction:'higher' },
+    { id:'5k_time', label:'5K Time', unit:'min:sec', valueType:'time', direction:'lower', type:'time' },
+    { id:'10k_time', label:'10K Time', unit:'min:sec', valueType:'time', direction:'lower', type:'time' },
+    { id:'half_time', label:'Half Marathon Time', unit:'min:sec', valueType:'time', direction:'lower', type:'time' },
+    { id:'marathon_time', label:'Marathon Time', unit:'min:sec', valueType:'time', direction:'lower', type:'time' },
+    { id:'weekly_distance', label:'Weekly Distance', unit:'km', valueType:'number', direction:'higher', type:'distance' },
+    { id:'longest_run', label:'Longest Single Run', unit:'km', valueType:'number', direction:'higher', type:'distance' },
+    { id:'5k_session', label:'5K Single Session', unit:'km', valueType:'number', direction:'higher', type:'distance' },
+    { id:'10k_session', label:'10K Single Session', unit:'km', valueType:'number', direction:'higher', type:'distance' },
+    { id:'half_session', label:'Half Marathon Single Session', unit:'km', valueType:'number', direction:'higher', type:'distance' },
+    { id:'marathon_session', label:'Marathon Single Session', unit:'km', valueType:'number', direction:'higher', type:'distance' },
   ],
   Strength: [
     { id:'squat', label:'Squat', unit:'kg', valueType:'number', direction:'higher' },
@@ -1407,7 +1412,7 @@ function findGoalMetric(category, metricId){
   return (GOAL_CATALOG[category]||[]).find(m=>m.id===metricId) || null;
 }
 
-/* ---------- ARCHITECTURE REPAIR A2: goal current-value resolver ----------
+/* ---------- ARCHITECTURE REPAIR A2 / RUNNING REWORK: goal current-value resolver ----------
    Goal TARGET is always user intent and is never touched here. Goal CURRENT VALUE is resolved fresh
    from existing authoritative data on every render for metrics where that mapping is unambiguous —
    never persisted back into the stored goal, so it can never fall out of sync or need an update hook
@@ -1415,19 +1420,23 @@ function findGoalMetric(category, metricId){
    back to the goal's own manually-maintained currentValue.
 
    Classification (verified against the actual exercise/activity data in this codebase, not assumed):
-   🟢 AUTO — Body/bodyweight (weight-log, via A1's getCurrentWeight), Running/weekly_distance and
-      Running/longest_run (pure aggregates of pace-log with no interpretation risk), Strength/bench,
-      Strength/deadlift, Strength/pullups (exercise-weights, but ONLY because 'Bench Press',
-      'Deadlift', and 'Pull-ups' exist as exact, unambiguous exercise names in this app's programs).
-   🟡 MANUAL — Running/5k_time, 10k_time, half_time: pace-log has no race/effort tagging, so the
-      closest-distance entry could just as easily be an easy training run; treating it as a time-trial
-      result would be an unsafe inference, not a derivation. Strength/squat and Strength/ohp: no exact
-      "Squat" or "Overhead Press" exercise exists — only named variants (Back Squat/Front Squat/
-      Bulgarian Split Squat; Standing Overhead Press/Seated DB Shoulder Press/Arnold Press) with no
-      single correct pick. Body/bodyfat: measurements-log has no body-fat field at all. Consistency/
-      adherence and streak: no existing adherence or streak calculation exists anywhere to reuse, and
-      inventing one (what window? what counts?) would be a new feature, not a data connection.
-      Other/custom: free-form by definition, can never be mapped. */
+   🟢 AUTO — Body/bodyweight (weight-log, via A1's getCurrentWeight); Running/weekly_distance (rolling
+      7-day sum of pace-log) and Running/longest_run + the four Single Session metrics (all read the
+      same underlying "max single logged run distance" — they differ only in what target the athlete
+      set, not in how current is derived); Strength/bench, Strength/deadlift, Strength/pullups
+      (exercise-weights, but ONLY because 'Bench Press', 'Deadlift', and 'Pull-ups' exist as exact,
+      unambiguous exercise names in this app's programs).
+   🟡 MANUAL — Running/5k_time, 10k_time, half_time, marathon_time: pace-log has no race/effort
+      tagging, so the closest-distance entry could just as easily be an easy training run; treating it
+      as a time-trial result would be an unsafe inference, not a derivation — this holds regardless of
+      which of the four time distances is selected. Strength/squat and Strength/ohp: no exact "Squat"
+      or "Overhead Press" exercise exists — only named variants (Back Squat/Front Squat/Bulgarian
+      Split Squat; Standing Overhead Press/Seated DB Shoulder Press/Arnold Press) with no single
+      correct pick. Body/bodyfat: measurements-log has no body-fat field at all. Consistency/adherence
+      and streak: no existing adherence or streak calculation exists anywhere to reuse, and inventing
+      one (what window? what counts?) would be a new feature, not a data connection. Other/custom:
+      free-form by definition, can never be mapped. */
+const RUNNING_SESSION_DISTANCE_METRICS = ['longest_run', '5k_session', '10k_session', 'half_session', 'marathon_session'];
 async function resolveGoalCurrentValue(goal){
   const { category, metricId } = goal;
 
@@ -1442,7 +1451,12 @@ async function resolveGoalCurrentValue(goal){
     return log.length ? Math.round(total*10)/10 : null;
   }
 
-  if(category === 'Running' && metricId === 'longest_run'){
+  if(category === 'Running' && RUNNING_SESSION_DISTANCE_METRICS.includes(metricId)){
+    // Longest Single Run and the four Single Session goals (5K/10K/Half/Marathon) all resolve to the
+    // same number — the athlete's single longest logged run ever — since "have I done a run of at
+    // least X km" and "how long is my longest run" are the same underlying fact, just framed against
+    // different targets. Not required to exactly hit 5/10/21.1/42.2km — any distance reaching or
+    // exceeding whatever target the athlete set completes that goal.
     const log = await getJSON('pace-log', []);
     if(!log.length) return null;
     return Math.max(...log.map(r=>parseFloat(r.dist)||0));
@@ -1471,11 +1485,22 @@ function formatSecondsToTime(sec){
   return `${m}:${String(s).padStart(2,'0')}`;
 }
 
-// Progress is intentionally simple and transparent: how far current has moved from where the goal
-// started, relative to the total distance to target — direction-aware so a "lower is better" goal
-// (like a 5K time) doesn't get treated as regressing when the number goes down.
+// Progress is intentionally simple and transparent. Two distinct models, chosen by what actually
+// makes sense for the goal type:
+//  - Running distance-type goals (weekly volume, longest run, single-session thresholds) use a plain
+//    current/target ratio. A fixed "how far from where you started" baseline is the wrong model here:
+//    Weekly Distance is a rolling 7-day sum that naturally goes down as well as up between weeks, and
+//    the four Single Session goals are pure thresholds (100% the moment one qualifying run happens) —
+//    neither is a monotonic "improvement from a starting point."
+//  - Everything else (manual time goals, strength, body weight, etc.) keeps the direction-aware
+//    baseline model, which is correct for goals with a meaningful fixed starting point.
+const RUNNING_DISTANCE_GOAL_METRICS = ['weekly_distance', ...RUNNING_SESSION_DISTANCE_METRICS];
 function computeGoalProgress(goal){
-  const { startValue, currentValue, targetValue, direction } = goal;
+  const { startValue, currentValue, targetValue, direction, category, metricId } = goal;
+  if(category === 'Running' && RUNNING_DISTANCE_GOAL_METRICS.includes(metricId)){
+    if(!targetValue) return 0;
+    return Math.max(0, Math.min(100, Math.round((currentValue / targetValue) * 100)));
+  }
   const span = direction === 'lower' ? (startValue - targetValue) : (targetValue - startValue);
   if(!span) return currentValue === targetValue ? 100 : 0; // start === target — avoid divide-by-zero
   const moved = direction === 'lower' ? (startValue - currentValue) : (currentValue - startValue);
@@ -1550,8 +1575,16 @@ async function renderTrainingGoals(){
         ${Object.keys(GOAL_CATALOG).map(cat=>`<button class="goal-chip" data-category="${cat}">${cat}</button>`).join('')}
       </div>
 
+      <div id="gfRunningTypeStep" style="display:none;">
+        <div class="goal-step-label">Time or Distance?</div>
+        <div class="goal-chip-row" id="gfRunningTypeChips">
+          <button class="goal-chip" data-runtype="time">Time</button>
+          <button class="goal-chip" data-runtype="distance">Distance</button>
+        </div>
+      </div>
+
       <div id="gfMetricStep" style="display:none;">
-        <div class="goal-step-label">2. Which metric?</div>
+        <div class="goal-step-label">Which metric?</div>
         <div class="goal-chip-row" id="gfMetricChips"></div>
       </div>
 
@@ -1559,13 +1592,13 @@ async function renderTrainingGoals(){
         <div class="goal-step-label" id="gfCustomLabel" style="display:none;">Goal Name</div>
         <div class="field" id="gfCustomNameField" style="display:none;margin-bottom:4px;"><input id="gfName" type="text" placeholder="e.g. Handstand hold"></div>
 
-        <div class="goal-step-label">3. Current &amp; target</div>
+        <div class="goal-step-label">Current &amp; target</div>
         <div id="gfValueInputs"></div>
 
-        <div class="goal-step-label">4. Target date (optional)</div>
+        <div class="goal-step-label">Target date (optional)</div>
         <div class="field" style="max-width:220px;"><input id="gfDeadline" type="date"></div>
 
-        <div class="goal-step-label">5. Priority</div>
+        <div class="goal-step-label">Priority</div>
         <div class="goal-chip-row">
           <button class="goal-chip selected" data-designation="secondary">Secondary Goal</button>
           <button class="goal-chip" data-designation="primary">Primary Goal</button>
@@ -1598,8 +1631,8 @@ async function renderTrainingGoals(){
     ` : ''}
   `;
 
-  // --- Add/Edit form wiring (chip-based flow: category → metric → contextual value inputs) ---
-  let gfState = { category:null, metricId:null, editId:'', designation:'secondary' };
+  // --- Add/Edit form wiring (chip-based flow: category → [Running only: time/distance] → metric → contextual value inputs) ---
+  let gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary' };
 
   function renderValueInputs(metric, current, target){
     const box = document.getElementById('gfValueInputs');
@@ -1646,7 +1679,11 @@ async function renderTrainingGoals(){
 
   function renderMetricChips(){
     const wrap = document.getElementById('gfMetricChips');
-    const metrics = GOAL_CATALOG[gfState.category] || [];
+    // For Running, only show metrics matching the chosen Time/Distance sub-step; every other
+    // category shows its full metric list directly, unchanged.
+    const metrics = gfState.category === 'Running'
+      ? (GOAL_CATALOG.Running||[]).filter(m=>m.type===gfState.runningType)
+      : (GOAL_CATALOG[gfState.category]||[]);
     wrap.innerHTML = metrics.map(m=>`<button class="goal-chip" data-metric="${m.id}">${m.label}</button>`).join('');
     wrap.querySelectorAll('[data-metric]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
@@ -1664,11 +1701,13 @@ async function renderTrainingGoals(){
   }
 
   function resetForm(){
-    gfState = { category:null, metricId:null, editId:'', designation:'secondary' };
+    gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary' };
     document.getElementById('gfEditId').value = '';
     document.getElementById('gfDeadline').value = '';
     document.getElementById('gfName').value = '';
     document.querySelectorAll('#gfCategoryChips [data-category]').forEach(b=>b.classList.remove('selected'));
+    document.querySelectorAll('#gfRunningTypeChips [data-runtype]').forEach(b=>b.classList.remove('selected'));
+    document.getElementById('gfRunningTypeStep').style.display = 'none';
     document.getElementById('gfMetricChips').innerHTML = '';
     document.getElementById('gfMetricStep').style.display = 'none';
     document.getElementById('gfDetailsStep').style.display = 'none';
@@ -1685,8 +1724,31 @@ async function renderTrainingGoals(){
       btn.classList.add('selected');
       gfState.category = btn.dataset.category;
       gfState.metricId = null;
-      document.getElementById('gfMetricStep').style.display = '';
+      gfState.runningType = null;
       document.getElementById('gfDetailsStep').style.display = 'none';
+      document.querySelectorAll('#gfRunningTypeChips [data-runtype]').forEach(b=>b.classList.remove('selected'));
+      if(gfState.category === 'Running'){
+        // Running needs one extra decision (Time vs Distance) before metrics can be shown, since the
+        // two groups have entirely different value shapes (a time input vs a plain distance number).
+        document.getElementById('gfRunningTypeStep').style.display = '';
+        document.getElementById('gfMetricStep').style.display = 'none';
+        document.getElementById('gfMetricChips').innerHTML = '';
+      } else {
+        document.getElementById('gfRunningTypeStep').style.display = 'none';
+        document.getElementById('gfMetricStep').style.display = '';
+        renderMetricChips();
+      }
+    });
+  });
+
+  document.querySelectorAll('#gfRunningTypeChips [data-runtype]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('#gfRunningTypeChips [data-runtype]').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      gfState.runningType = btn.dataset.runtype;
+      gfState.metricId = null;
+      document.getElementById('gfDetailsStep').style.display = 'none';
+      document.getElementById('gfMetricStep').style.display = '';
       renderMetricChips();
     });
   });
@@ -1773,12 +1835,24 @@ async function renderTrainingGoals(){
       gfState.designation = g.designation;
 
       document.querySelectorAll('#gfCategoryChips [data-category]').forEach(b=>b.classList.toggle('selected', b.dataset.category===gfState.category));
+
+      const editMetric = findGoalMetric(gfState.category, gfState.metricId);
+      document.querySelectorAll('#gfRunningTypeChips [data-runtype]').forEach(b=>b.classList.remove('selected'));
+      if(gfState.category === 'Running'){
+        gfState.runningType = editMetric ? editMetric.type : 'time';
+        document.getElementById('gfRunningTypeStep').style.display = '';
+        const typeBtn = document.querySelector(`#gfRunningTypeChips [data-runtype="${gfState.runningType}"]`);
+        if(typeBtn) typeBtn.classList.add('selected');
+      } else {
+        gfState.runningType = null;
+        document.getElementById('gfRunningTypeStep').style.display = 'none';
+      }
       document.getElementById('gfMetricStep').style.display = '';
       renderMetricChips();
       const metricBtn = document.querySelector(`#gfMetricChips [data-metric="${gfState.metricId}"]`);
       if(metricBtn) metricBtn.classList.add('selected');
 
-      const metric = findGoalMetric(gfState.category, gfState.metricId) || GOAL_CATALOG.Other[0];
+      const metric = editMetric || GOAL_CATALOG.Other[0];
       document.getElementById('gfDetailsStep').style.display = '';
       const isCustom = !!metric.customizable;
       document.getElementById('gfCustomLabel').style.display = isCustom ? '' : 'none';
@@ -3611,12 +3685,8 @@ async function renderTrackers(){
       <p class="muted" style="margin-top:10px;font-size:12px;">Rows marked <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);">AUTO</span> were detected automatically when you beat a previous best in Session Mode.</p>
     </div></div>
     <div class="pane" data-pane="pace"><div class="card">
-      <div class="form-row">
-        <div class="field"><label>Date</label><input id="rDate" type="date"></div>
-        <div class="field"><label>Distance (km)</label><input id="rDist" type="number" step="0.1" style="width:100px;"></div>
-        <div class="field"><label>Time (min)</label><input id="rTime" type="number" step="0.1" style="width:100px;"></div>
-        <button class="btn" id="rAdd">Add Run</button>
-      </div>
+      <p class="muted" style="margin-bottom:14px;">Your running history and analytics, read from the same log Running and Trackers both share. Log a run from the Running page — this view is for reviewing, not logging.</p>
+      <div class="grid g3" id="paceStatsGrid" style="margin-bottom:16px;"></div>
       <table><thead><tr><th>Date</th><th class="num">Distance</th><th class="num">Time</th><th class="num">Pace (min/km)</th></tr></thead><tbody id="rBody"></tbody></table>
     </div></div>
   `;
@@ -3675,18 +3745,30 @@ async function renderTrackers(){
     pLog.push({date, ex, w, r}); await setJSON('pr-log', pLog); refreshTrackersKeepTab();
   });
 
-  // Pace
+  // Pace — read-only analytics over the shared pace-log; actual run logging lives on the Running
+  // page (both modes) and Trackers must never become a second place that writes it.
   let rLog = await getJSON('pace-log', []);
   function paintR(){
     document.getElementById('rBody').innerHTML = rLog.slice().reverse().map(r=>`<tr><td>${r.date}</td><td class="num">${r.dist} km</td><td class="num">${r.time} min</td><td class="num">${(r.time/r.dist).toFixed(2)}</td></tr>`).join('') || `<tr><td colspan="4" class="muted">No entries yet</td></tr>`;
+    const statsGrid = document.getElementById('paceStatsGrid');
+    if(!statsGrid) return;
+    if(!rLog.length){
+      statsGrid.innerHTML = `<p class="muted">Log a run from the Running page to see your stats here.</p>`;
+      return;
+    }
+    const totalDist = rLog.reduce((s,r)=>s+(parseFloat(r.dist)||0),0);
+    const totalTime = rLog.reduce((s,r)=>s+(parseFloat(r.time)||0),0);
+    const avgPace = totalDist ? (totalTime/totalDist).toFixed(2) : '—';
+    const longest = Math.max(...rLog.map(r=>parseFloat(r.dist)||0));
+    const cutoff = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+    const weeklyDist = Math.round(rLog.filter(r=>r.date>=cutoff).reduce((s,r)=>s+(parseFloat(r.dist)||0),0)*10)/10;
+    statsGrid.innerHTML = `
+      <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">This Week</div><div class="stat-value">${weeklyDist} <small>km</small></div></div>
+      <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Longest Run</div><div class="stat-value">${longest} <small>km</small></div></div>
+      <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Avg Pace</div><div class="stat-value">${avgPace} <small>min/km</small></div></div>
+    `;
   }
   paintR();
-  document.getElementById('rAdd').addEventListener('click', async ()=>{
-    const date = document.getElementById('rDate').value || todayKey();
-    const dist = parseFloat(document.getElementById('rDist').value); const time = parseFloat(document.getElementById('rTime').value);
-    if(!dist||!time) return;
-    rLog.push({date, dist, time}); await setJSON('pace-log', rLog); paintR();
-  });
 
   renderProgressCharts(wLog, bLog, pLog);
 }
