@@ -1472,6 +1472,17 @@ async function resolveGoalCurrentValue(goal){
   return null; // not safely derivable — caller uses the goal's own stored currentValue
 }
 
+// Mirrors resolveGoalCurrentValue's coverage exactly (kept as a static check rather than calling the
+// resolver itself, since the form needs to know synchronously whether to offer "Auto" at all — the
+// actual live value is only fetched once the athlete picks that option).
+const STRENGTH_AUTO_METRICS = ['bench', 'deadlift', 'pullups'];
+function isAutoCapableMetric(category, metricId){
+  if(category === 'Body' && metricId === 'bodyweight') return true;
+  if(category === 'Running' && (metricId === 'weekly_distance' || RUNNING_SESSION_DISTANCE_METRICS.includes(metricId))) return true;
+  if(category === 'Strength' && STRENGTH_AUTO_METRICS.includes(metricId)) return true;
+  return false;
+}
+
 // Time goals (e.g. a 5K finish time) are entered as MM:SS but stored as total seconds internally, so
 // progress math stays on plain numbers rather than needing separate time-parsing logic at calc time.
 function parseTimeToSeconds(str){
@@ -1514,28 +1525,51 @@ function formatGoalValue(goal, value){
 
 async function renderTrainingGoals(){
   const el = document.getElementById('view-goals');
-  const goals = await getJSON('training-goals', []);
+  const rawGoals = await getJSON('training-goals', []);
   const profile = await getAthleteProfile();
+
+  // A2/current-value-modes: resolve a live current value for every goal where it's safely derivable;
+  // goals without a safe source keep their own stored currentValue, which may itself be null if the
+  // athlete chose "I don't know" and nothing relevant has been logged yet. Pre-computed here (can't
+  // await inside the template-building functions below).
+  //
+  // Lazy baseline capture: a goal created with "I don't know" (or "Auto" before any data existed yet)
+  // stores startValue/currentValue as null. The very first time this resolves to a real value, that
+  // value is written into the goal's OWN startValue/currentValue fields — a legitimate one-time write
+  // to a field the goal itself owns (not a second copy of the underlying performance data, which
+  // remains solely in weight-log/pace-log/exercise-weights). After that first capture, this is a pure
+  // read on every subsequent render, exactly like the rest of A2.
+  const resolvedMap = {}, autoMap = {};
+  let goalsChanged = false;
+  const goals = rawGoals.slice(); // may get baseline-captured entries swapped in below
+  for(let i=0; i<goals.length; i++){
+    const g = goals[i];
+    const resolved = await resolveGoalCurrentValue(g);
+    const hasValue = resolved !== null && resolved !== undefined;
+    if(hasValue && (g.startValue === null || g.startValue === undefined)){
+      goals[i] = { ...g, startValue: resolved, currentValue: resolved };
+      goalsChanged = true;
+    }
+    resolvedMap[goals[i].id] = hasValue ? resolved : goals[i].currentValue;
+    autoMap[goals[i].id] = hasValue;
+  }
+  if(goalsChanged) await setJSON('training-goals', goals);
+
+  // Filtered AFTER the capture step above, so a goal that just got its baseline written this render
+  // carries the correct startValue into computeGoalProgress() immediately, not one render later.
   const active = goals.filter(g=>g.status!=='completed');
   const completed = goals.filter(g=>g.status==='completed');
   const primary = active.find(g=>g.designation==='primary');
   const secondary = active.filter(g=>g.designation!=='primary');
 
-  // A2: resolve a live current value for every goal where it's safely derivable; goals without a safe
-  // source keep their own stored currentValue, untouched. Pre-computed here (can't await inside the
-  // template-building functions below) and never written back to storage — pure read, every render.
-  const resolvedMap = {}, autoMap = {};
-  for(const g of goals){
-    const resolved = await resolveGoalCurrentValue(g);
-    const hasValue = resolved !== null && resolved !== undefined;
-    resolvedMap[g.id] = hasValue ? resolved : g.currentValue;
-    autoMap[g.id] = hasValue;
-  }
-
   function goalCardHTML(g){
     const effectiveCurrent = resolvedMap[g.id];
     const isAuto = autoMap[g.id];
-    const pct = computeGoalProgress({...g, currentValue: effectiveCurrent});
+    const hasCurrent = effectiveCurrent !== null && effectiveCurrent !== undefined;
+    const pct = hasCurrent ? computeGoalProgress({...g, currentValue: effectiveCurrent}) : 0;
+    const waitingNote = !hasCurrent ? (g.currentValueMode==='unknown'
+      ? "Waiting for you to log something relevant — we'll pick it up automatically."
+      : "No current value set yet — edit this goal to add one.") : '';
     return `
     <div class="card goal-card" data-goalid="${g.id}" style="margin-bottom:14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
@@ -1544,11 +1578,11 @@ async function renderTrainingGoals(){
       </div>
       <h3 style="margin-top:10px;">${g.name}</h3>
       <div class="grid g2" style="margin-top:10px;">
-        <div><div class="stat-label">Current${isAuto?' <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);font-size:9px;margin-left:4px;">LIVE</span>':''}</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, effectiveCurrent)}</div></div>
+        <div><div class="stat-label">Current${isAuto?' <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);font-size:9px;margin-left:4px;">LIVE</span>':''}</div><div class="stat-value" style="font-size:20px;">${hasCurrent?formatGoalValue(g, effectiveCurrent):'—'}</div></div>
         <div><div class="stat-label">Target</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.targetValue)}</div></div>
       </div>
       <div class="goal-progress-track"><div class="goal-progress-fill${pct>=100?' complete':''}" style="width:${pct}%;"></div></div>
-      <p class="muted" style="margin-top:6px;font-size:12px;">${pct}% of the way to target${g.deadline?` · by ${g.deadline}`:''}${isAuto?' · current value updates automatically from your logged activity':''}</p>
+      <p class="muted" style="margin-top:6px;font-size:12px;">${hasCurrent?`${pct}% of the way to target`:waitingNote}${g.deadline?` · by ${g.deadline}`:''}${isAuto&&hasCurrent?' · current value updates automatically from your logged activity':''}</p>
       <div class="goal-card-actions">
         <button data-editgoal="${g.id}">Edit</button>
         ${g.designation!=='primary'?`<button class="primary-action" data-setprimary="${g.id}">Set as Primary</button>`:''}
@@ -1592,8 +1626,17 @@ async function renderTrainingGoals(){
         <div class="goal-step-label" id="gfCustomLabel" style="display:none;">Goal Name</div>
         <div class="field" id="gfCustomNameField" style="display:none;margin-bottom:4px;"><input id="gfName" type="text" placeholder="e.g. Handstand hold"></div>
 
-        <div class="goal-step-label">Current &amp; target</div>
-        <div id="gfValueInputs"></div>
+        <div class="goal-step-label">Current value</div>
+        <div class="goal-chip-row" id="gfCurrentModeChips">
+          <button class="goal-chip" data-currentmode="auto">Auto</button>
+          <button class="goal-chip" data-currentmode="unknown">I don't know</button>
+          <button class="goal-chip selected" data-currentmode="manual">Enter manually</button>
+        </div>
+        <p class="muted" id="gfCurrentModeNote" style="margin-top:6px;font-size:12px;"></p>
+        <div id="gfCurrentValueInputs" style="margin-top:8px;"></div>
+
+        <div class="goal-step-label">Target</div>
+        <div id="gfTargetValueInputs"></div>
 
         <div class="goal-step-label">Target date (optional)</div>
         <div class="field" style="max-width:220px;"><input id="gfDeadline" type="date"></div>
@@ -1632,22 +1675,14 @@ async function renderTrainingGoals(){
   `;
 
   // --- Add/Edit form wiring (chip-based flow: category → [Running only: time/distance] → metric → contextual value inputs) ---
-  let gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary' };
+  let gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary', currentMode:'manual' };
 
-  function renderValueInputs(metric, current, target){
-    const box = document.getElementById('gfValueInputs');
+  function renderTargetValueInputs(metric, target){
+    const box = document.getElementById('gfTargetValueInputs');
     if(!metric){ box.innerHTML = ''; return; }
     if(metric.valueType === 'time'){
-      const cur = current!=null ? {m:Math.floor(current/60), s:current%60} : {m:'',s:''};
       const tgt = target!=null ? {m:Math.floor(target/60), s:target%60} : {m:'',s:''};
       box.innerHTML = `
-        <div class="field" style="margin-bottom:4px;"><label>Current</label></div>
-        <div class="goal-time-row" style="margin-bottom:14px;">
-          <div class="field"><input id="gfCurrentMin" type="number" min="0" placeholder="Min" value="${cur.m}"></div>
-          <div class="goal-time-colon">:</div>
-          <div class="field"><input id="gfCurrentSec" type="number" min="0" max="59" placeholder="Sec" value="${cur.s}"></div>
-        </div>
-        <div class="field" style="margin-bottom:4px;"><label>Target</label></div>
         <div class="goal-time-row">
           <div class="field"><input id="gfTargetMin" type="number" min="0" placeholder="Min" value="${tgt.m}"></div>
           <div class="goal-time-colon">:</div>
@@ -1655,13 +1690,8 @@ async function renderTrainingGoals(){
         </div>`;
     } else {
       box.innerHTML = `
-        <div class="goal-form-grid">
-          <div class="field"><label>Current${metric.unit?` (${metric.unit})`:''}</label>
-            <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
-          </div>
-          <div class="field"><label>Target${metric.unit?` (${metric.unit})`:''}</label>
-            <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
-          </div>
+        <div class="field"><label>Target${metric.unit?` (${metric.unit})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
         </div>
         ${metric.customizable ? `
         <div class="goal-form-grid" style="margin-top:12px;">
@@ -1675,6 +1705,57 @@ async function renderTrainingGoals(){
         </div>` : ''}
       `;
     }
+  }
+
+  // Current value has three modes — Auto (live from an existing data source), "I don't know" (start
+  // blank, capture the first live value that becomes available as the baseline), or manual entry
+  // (the athlete's own starting-point number). Auto/unknown never ask for a number here at all —
+  // asking for one and then ignoring it would be confusing, not helpful.
+  function renderCurrentValueInputs(metric, mode, current){
+    const box = document.getElementById('gfCurrentValueInputs');
+    const note = document.getElementById('gfCurrentModeNote');
+    if(!metric){ box.innerHTML = ''; note.textContent = ''; return; }
+    if(mode === 'auto'){
+      box.innerHTML = `<p class="muted" id="gfAutoPreview" style="font-size:13px;">Checking your current ${metric.label.toLowerCase()}…</p>`;
+      note.textContent = "We'll keep using your actual data automatically — no need to enter a number.";
+      resolveGoalCurrentValue({category: gfState.category, metricId: gfState.metricId}).then(val=>{
+        const preview = document.getElementById('gfAutoPreview');
+        if(!preview) return; // form moved on before this resolved
+        preview.textContent = (val!==null && val!==undefined)
+          ? `Currently: ${formatGoalValue(metric, val)}`
+          : `No data yet for this — we'll start tracking as soon as you log something relevant.`;
+      });
+      return;
+    }
+    if(mode === 'unknown'){
+      box.innerHTML = '';
+      note.textContent = "No problem — we'll automatically use the next relevant thing you log as your starting point.";
+      return;
+    }
+    // manual
+    note.textContent = '';
+    if(metric.valueType === 'time'){
+      const cur = current!=null ? {m:Math.floor(current/60), s:current%60} : {m:'',s:''};
+      box.innerHTML = `
+        <div class="goal-time-row">
+          <div class="field"><input id="gfCurrentMin" type="number" min="0" placeholder="Min" value="${cur.m}"></div>
+          <div class="goal-time-colon">:</div>
+          <div class="field"><input id="gfCurrentSec" type="number" min="0" max="59" placeholder="Sec" value="${cur.s}"></div>
+        </div>`;
+    } else {
+      box.innerHTML = `
+        <div class="field"><label>Current${metric.unit?` (${metric.unit})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
+        </div>`;
+    }
+  }
+
+  function updateCurrentModeChips(metric){
+    const autoChip = document.querySelector('#gfCurrentModeChips [data-currentmode="auto"]');
+    const autoCapable = metric && isAutoCapableMetric(gfState.category, gfState.metricId);
+    autoChip.style.display = autoCapable ? '' : 'none';
+    if(!autoCapable && gfState.currentMode === 'auto') gfState.currentMode = 'manual';
+    document.querySelectorAll('#gfCurrentModeChips [data-currentmode]').forEach(b=>b.classList.toggle('selected', b.dataset.currentmode===gfState.currentMode));
   }
 
   function renderMetricChips(){
@@ -1695,13 +1776,25 @@ async function renderTrainingGoals(){
         const isCustom = !!metric.customizable;
         document.getElementById('gfCustomLabel').style.display = isCustom ? '' : 'none';
         document.getElementById('gfCustomNameField').style.display = isCustom ? '' : 'none';
-        renderValueInputs(metric);
+        updateCurrentModeChips(metric);
+        renderCurrentValueInputs(metric, gfState.currentMode);
+        renderTargetValueInputs(metric);
       });
     });
   }
 
+  document.querySelectorAll('#gfCurrentModeChips [data-currentmode]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      document.querySelectorAll('#gfCurrentModeChips [data-currentmode]').forEach(b=>b.classList.remove('selected'));
+      btn.classList.add('selected');
+      gfState.currentMode = btn.dataset.currentmode;
+      const metric = findGoalMetric(gfState.category, gfState.metricId);
+      if(metric) renderCurrentValueInputs(metric, gfState.currentMode);
+    });
+  });
+
   function resetForm(){
-    gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary' };
+    gfState = { category:null, runningType:null, metricId:null, editId:'', designation:'secondary', currentMode:'manual' };
     document.getElementById('gfEditId').value = '';
     document.getElementById('gfDeadline').value = '';
     document.getElementById('gfName').value = '';
@@ -1712,6 +1805,10 @@ async function renderTrainingGoals(){
     document.getElementById('gfMetricStep').style.display = 'none';
     document.getElementById('gfDetailsStep').style.display = 'none';
     document.querySelectorAll('#gfDetailsStep [data-designation]').forEach(b=>b.classList.toggle('selected', b.dataset.designation==='secondary'));
+    document.querySelectorAll('#gfCurrentModeChips [data-currentmode]').forEach(b=>b.classList.toggle('selected', b.dataset.currentmode==='manual'));
+    document.getElementById('gfCurrentValueInputs').innerHTML = '';
+    document.getElementById('gfCurrentModeNote').textContent = '';
+    document.getElementById('gfTargetValueInputs').innerHTML = '';
     document.getElementById('goalFormTitle').textContent = 'Add a Goal';
     document.getElementById('gfSaveBtn').textContent = 'Add Goal';
     document.getElementById('gfCancelBtn').style.display = 'none';
@@ -1761,24 +1858,46 @@ async function renderTrainingGoals(){
     });
   });
 
-  function readValueInputs(metric){
+  async function readCurrentValue(metric, mode){
+    if(mode === 'manual'){
+      if(metric.valueType === 'time'){
+        const cm = parseInt(document.getElementById('gfCurrentMin').value);
+        const cs = parseInt(document.getElementById('gfCurrentSec').value);
+        if(isNaN(cm)||isNaN(cs)) return { ok:false };
+        return { ok:true, value: cm*60+cs };
+      }
+      const v = parseFloat(document.getElementById('gfCurrentVal').value);
+      if(isNaN(v)) return { ok:false };
+      return { ok:true, value: v };
+    }
+    if(mode === 'auto'){
+      // Resolve right now so the goal has an immediate baseline instead of waiting — "I don't know"
+      // below is the mode for genuinely starting blank.
+      const resolved = await resolveGoalCurrentValue({category: gfState.category, metricId: gfState.metricId});
+      return { ok:true, value: (resolved!==null && resolved!==undefined) ? resolved : null };
+    }
+    // 'unknown' — deliberately never resolves now, even if data already exists; the baseline gets
+    // captured later, once, by renderTrainingGoals()'s lazy-capture logic the first time a value
+    // becomes available, so it genuinely reflects "the next relevant thing you log" rather than
+    // whatever happened to exist at creation time.
+    return { ok:true, value: null };
+  }
+
+  function readTargetInputs(metric){
     if(metric.valueType === 'time'){
-      const cm = parseInt(document.getElementById('gfCurrentMin').value);
-      const cs = parseInt(document.getElementById('gfCurrentSec').value);
       const tm = parseInt(document.getElementById('gfTargetMin').value);
       const ts = parseInt(document.getElementById('gfTargetSec').value);
-      if(isNaN(cm)||isNaN(cs)||isNaN(tm)||isNaN(ts)) return null;
-      return { currentValue: cm*60+cs, targetValue: tm*60+ts, unit:'min:sec' };
+      if(isNaN(tm)||isNaN(ts)) return null;
+      return { targetValue: tm*60+ts, unit:'min:sec' };
     }
-    const currentValue = parseFloat(document.getElementById('gfCurrentVal').value);
     const targetValue = parseFloat(document.getElementById('gfTargetVal').value);
-    if(isNaN(currentValue) || isNaN(targetValue)) return null;
+    if(isNaN(targetValue)) return null;
     let unit = metric.unit, direction = metric.direction;
     if(metric.customizable){
       unit = document.getElementById('gfCustomUnit').value.trim();
       direction = document.getElementById('gfCustomDirection').value;
     }
-    return { currentValue, targetValue, unit, direction };
+    return { targetValue, unit, direction };
   }
 
   document.getElementById('gfSaveBtn').addEventListener('click', async ()=>{
@@ -1786,17 +1905,25 @@ async function renderTrainingGoals(){
     const metric = findGoalMetric(gfState.category, gfState.metricId);
     if(!metric){ msg.textContent = 'Pick a category and a metric first.'; return; }
     if(metric.customizable && !document.getElementById('gfName').value.trim()){ msg.textContent = 'Give the goal a name.'; return; }
-    const vals = readValueInputs(metric);
-    if(!vals){ msg.textContent = metric.valueType==='time' ? 'Enter minutes and seconds for both current and target.' : 'Enter valid numbers for current and target.'; return; }
-    const { currentValue, targetValue } = vals;
-    const unit = vals.unit;
+
+    const targetVals = readTargetInputs(metric);
+    if(!targetVals){ msg.textContent = metric.valueType==='time' ? 'Enter minutes and seconds for the target.' : 'Enter a valid target value.'; return; }
+    const { targetValue, unit } = targetVals;
+
+    const currentResult = await readCurrentValue(metric, gfState.currentMode);
+    if(!currentResult.ok){ msg.textContent = metric.valueType==='time' ? "Enter minutes and seconds for the current value, or choose Auto / I don't know." : "Enter a valid current value, or choose Auto / I don't know."; return; }
+    const currentValue = currentResult.value; // may be null (auto with no data yet, or unknown)
+
     // 'auto' direction (e.g. body weight, where either loss or gain is a legitimate goal) is inferred
-    // from which way the athlete is actually trying to move, rather than asked as a separate field.
-    let direction = vals.direction;
-    if(direction === 'auto') direction = targetValue < currentValue ? 'lower' : 'higher';
+    // from which way the athlete is actually trying to move. Only Body Weight uses this, and
+    // getCurrentWeight() never returns null, so currentValue is always available by this point for it.
+    let direction = targetVals.direction;
+    if(direction === 'auto') direction = (currentValue!==null && targetValue < currentValue) ? 'lower' : 'higher';
+
     const name = metric.customizable ? document.getElementById('gfName').value.trim() : metric.label;
     const deadline = document.getElementById('gfDeadline').value;
     const editId = gfState.editId;
+    const currentValueMode = gfState.currentMode;
 
     let allGoals = await getJSON('training-goals', []);
     if(gfState.designation === 'primary'){
@@ -1806,13 +1933,17 @@ async function renderTrainingGoals(){
     if(editId){
       allGoals = allGoals.map(g => g.id===editId ? {
         ...g, name, category: gfState.category, metricId: gfState.metricId, unit, direction,
-        currentValue, targetValue, designation: gfState.designation, deadline,
+        currentValueMode,
+        // Only overwrite the stored baseline if this save actually produced a concrete number —
+        // switching an existing goal to "I don't know" shouldn't erase a baseline it already has.
+        ...(currentValue !== null ? { startValue: currentValue, currentValue } : {}),
+        targetValue, designation: gfState.designation, deadline,
       } : g);
     } else {
       allGoals.push({
         id: 'goal-'+Date.now()+'-'+Math.random().toString(36).slice(2,7),
-        name, category: gfState.category, metricId: gfState.metricId, unit, direction,
-        startValue: currentValue, // baseline for progress math — fixed at creation time, never changes
+        name, category: gfState.category, metricId: gfState.metricId, unit, direction, currentValueMode,
+        startValue: currentValue, // may be null — captured later by renderTrainingGoals() once data appears
         currentValue, targetValue, designation: gfState.designation, deadline,
         createdDate: todayKey(), status: 'active',
       });
@@ -1858,7 +1989,13 @@ async function renderTrainingGoals(){
       document.getElementById('gfCustomLabel').style.display = isCustom ? '' : 'none';
       document.getElementById('gfCustomNameField').style.display = isCustom ? '' : 'none';
       if(isCustom) document.getElementById('gfName').value = g.name;
-      renderValueInputs(metric, g.currentValue, g.targetValue);
+      // Legacy goals (saved before this current-value-mode feature existed) have no
+      // currentValueMode field at all — treat them as 'manual' so their existing behavior and stored
+      // number are preserved exactly as before, rather than silently switching them to Auto.
+      gfState.currentMode = g.currentValueMode || 'manual';
+      updateCurrentModeChips(metric);
+      renderCurrentValueInputs(metric, gfState.currentMode, g.currentValue);
+      renderTargetValueInputs(metric, g.targetValue);
       if(isCustom){
         document.getElementById('gfCustomUnit').value = g.unit || '';
         document.getElementById('gfCustomDirection').value = g.direction === 'lower' ? 'lower' : 'higher';
