@@ -1426,17 +1426,23 @@ function findGoalMetric(category, metricId){
       set, not in how current is derived); Strength/bench, Strength/deadlift, Strength/pullups
       (exercise-weights, but ONLY because 'Bench Press', 'Deadlift', and 'Pull-ups' exist as exact,
       unambiguous exercise names in this app's programs).
-   🟡 MANUAL — Running/5k_time, 10k_time, half_time, marathon_time: pace-log has no race/effort
-      tagging, so the closest-distance entry could just as easily be an easy training run; treating it
-      as a time-trial result would be an unsafe inference, not a derivation — this holds regardless of
-      which of the four time distances is selected. Strength/squat and Strength/ohp: no exact "Squat"
-      or "Overhead Press" exercise exists — only named variants (Back Squat/Front Squat/Bulgarian
-      Split Squat; Standing Overhead Press/Seated DB Shoulder Press/Arnold Press) with no single
-      correct pick. Body/bodyfat: measurements-log has no body-fat field at all. Consistency/adherence
-      and streak: no existing adherence or streak calculation exists anywhere to reuse, and inventing
-      one (what window? what counts?) would be a new feature, not a data connection. Other/custom:
-      free-form by definition, can never be mapped. */
+   🟢 AUTO (added later) — Running/5k_time, 10k_time, half_time, marathon_time: pace-log still has no
+      race/effort tagging, so this reads distance-matched runs (within the same tolerance band already
+      used for Long Run auto-check matching) and takes the fastest logged time among them as a best-
+      effort proxy. This is a deliberate, explicitly-requested loosening of the original A2 stance
+      above (which held that inferring a time-trial result from an untagged log was unsafe) — kept here
+      as a distinct, clearly-labeled case rather than silently rewriting the original reasoning.
+   🟡 MANUAL — Strength/squat and Strength/ohp: no exact "Squat" or "Overhead Press" exercise exists —
+      only named variants (Back Squat/Front Squat/Bulgarian Split Squat; Standing Overhead Press/Seated
+      DB Shoulder Press/Arnold Press) with no single correct pick. Body/bodyfat: measurements-log has no
+      body-fat field at all. Consistency/adherence and streak: no existing adherence or streak
+      calculation exists anywhere to reuse, and inventing one (what window? what counts?) would be a new
+      feature, not a data connection. Other/custom: free-form by definition, can never be mapped. */
 const RUNNING_SESSION_DISTANCE_METRICS = ['longest_run', '5k_session', '10k_session', 'half_session', 'marathon_session'];
+// Standard race distances (km) for matching logged runs to a time-goal's category. pace-log entries
+// aren't tagged by race type, so matching uses the same tolerance convention as the existing Long Run
+// auto-check (Math.max(0.5, target*0.15)) rather than requiring an exact km hit.
+const RUNNING_TIME_DISTANCE_KM = { '5k_time':5, '10k_time':10, 'half_time':21.1, 'marathon_time':42.2 };
 async function resolveGoalCurrentValue(goal){
   const { category, metricId } = goal;
 
@@ -1469,6 +1475,25 @@ async function resolveGoalCurrentValue(goal){
     return w ? parseFloat(w) : null;
   }
 
+  if(category === 'Running' && RUNNING_TIME_DISTANCE_KM[metricId] !== undefined){
+    const log = await getJSON('pace-log', []);
+    if(!log.length) return null;
+    const targetKm = RUNNING_TIME_DISTANCE_KM[metricId];
+    const tolerance = Math.max(0.5, targetKm*0.15);
+    // time is logged in minutes (see renderRunningFreeform/renderRunningGoalPlan); goal values are
+    // stored in seconds (see parseTimeToSeconds/formatSecondsToTime), so convert on the way out.
+    const matchingTimesSec = log
+      .filter(r=>{
+        const d = parseFloat(r.dist);
+        return d && Math.abs(d - targetKm) <= tolerance;
+      })
+      .map(r=>parseFloat(r.time))
+      .filter(t=> t > 0)
+      .map(t=> t*60);
+    if(!matchingTimesSec.length) return null;
+    return Math.round(Math.min(...matchingTimesSec)); // best (fastest) = lowest seconds — goal is a performance target
+  }
+
   return null; // not safely derivable — caller uses the goal's own stored currentValue
 }
 
@@ -1479,6 +1504,7 @@ const STRENGTH_AUTO_METRICS = ['bench', 'deadlift', 'pullups'];
 function isAutoCapableMetric(category, metricId){
   if(category === 'Body' && metricId === 'bodyweight') return true;
   if(category === 'Running' && (metricId === 'weekly_distance' || RUNNING_SESSION_DISTANCE_METRICS.includes(metricId))) return true;
+  if(category === 'Running' && RUNNING_TIME_DISTANCE_KM[metricId] !== undefined) return true;
   if(category === 'Strength' && STRENGTH_AUTO_METRICS.includes(metricId)) return true;
   return false;
 }
