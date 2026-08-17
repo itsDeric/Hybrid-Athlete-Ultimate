@@ -214,6 +214,12 @@ td.num,th.num{font-family:var(--mono);}
 .goal-value-suffix{display:flex;align-items:center;gap:8px;}
 .goal-value-suffix input{flex:1;}
 .goal-value-suffix span{font-size:13px;color:var(--gray-600);font-weight:600;min-width:fit-content;}
+.scale-label{font-size:12px;font-weight:700;color:var(--gray-600);text-transform:uppercase;letter-spacing:.04em;}
+.scale-row{display:flex;gap:6px;margin-top:8px;}
+.scale-btn{flex:1;padding:10px 0;border-radius:10px;border:1px solid var(--gray-200);background:#fff;font-family:var(--mono);font-weight:700;font-size:14px;color:var(--gray-600);cursor:pointer;}
+.scale-btn:hover{border-color:var(--gray-400);}
+.scale-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+.scale-hint{display:flex;justify-content:space-between;font-size:10.5px;color:var(--gray-400);margin-top:4px;}
 .tag.gray{background:var(--gray-100);color:var(--gray-600);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
@@ -1547,6 +1553,25 @@ async function migrateProfileWeightToLog(){
     }
   }
   await setJSON('weight-log-migrated', true);
+}
+
+/* ---------- RECOVERY LOG: SINGLE SOURCE OF TRUTH FOR SLEEP/SORENESS/ENERGY ----------
+   Mirrors the weight-log pattern above (A1): one entry per day, upsert-in-place rather than append,
+   so checking in again today corrects today's entry instead of creating a duplicate. Before this,
+   Recovery was pure static program copy with nothing actually logged — flagged in the last audit as
+   the reason a real Readiness score / "Today" dashboard couldn't exist yet. This is that missing data
+   source; the dashboard itself is a separate, later piece of work built on top of this. */
+async function getTodayRecoveryEntry(){
+  const log = await getJSON('recovery-log', []);
+  return log.find(e=>e.date===todayKey()) || null;
+}
+async function recordRecoveryEntry(patch){
+  const date = todayKey();
+  const log = await getJSON('recovery-log', []);
+  const idx = log.findIndex(e=>e.date===date);
+  if(idx >= 0) log[idx] = Object.assign({}, log[idx], patch, {date});
+  else log.push(Object.assign({date}, patch));
+  await setJSON('recovery-log', log);
 }
 
 const PROFILE_DEFAULTS = {
@@ -3980,6 +4005,126 @@ async function renderNutrition(){
 }
 
 /* ---------- RECOVERY ---------- */
+function recoveryCheckInHTML(entry){
+  entry = entry || {};
+  const scaleBtns = (name, val)=> [1,2,3,4,5].map(n=>`<button class="scale-btn ${val===n?'active':''}" data-scale="${name}" data-val="${n}">${n}</button>`).join('');
+  return `
+    <div class="card" style="margin-bottom:14px;" id="recoveryCheckInCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <h3>Today's Check-In</h3>
+        <span class="tag ${entry.date?'green':'gray'}">${entry.date?'Logged today':'Not logged yet'}</span>
+      </div>
+      <div class="form-row" style="margin-top:10px;margin-bottom:0;">
+        <div class="field" style="max-width:160px;"><label>Sleep (hours)</label><input id="recSleepHours" type="number" step="0.25" min="0" max="14" placeholder="e.g. 7.5" value="${entry.sleepHours!=null?entry.sleepHours:''}"></div>
+      </div>
+      <div style="margin-top:14px;">
+        <label class="scale-label">Soreness</label>
+        <div class="scale-row" id="recSorenessRow">${scaleBtns('soreness', entry.soreness)}</div>
+        <div class="scale-hint"><span>Fresh</span><span>Very sore</span></div>
+      </div>
+      <div style="margin-top:14px;">
+        <label class="scale-label">Energy</label>
+        <div class="scale-row" id="recEnergyRow">${scaleBtns('energy', entry.energy)}</div>
+        <div class="scale-hint"><span>Drained</span><span>Great</span></div>
+      </div>
+      <button class="btn" id="recSaveBtn" style="margin-top:16px;">Save Today's Check-In</button>
+      <p class="muted" id="recSaveMeta" style="margin-top:8px;"></p>
+    </div>
+    <div class="grid g4" style="margin-bottom:14px;" id="recoveryWeekStats"></div>
+    <div class="card" style="margin-bottom:14px;">
+      <h3>Sleep — Last 14 Days</h3>
+      <p class="muted" style="margin-top:2px;">Dashed line marks the 7.5–9h range this program's guidance targets.</p>
+      <div style="position:relative;height:200px;margin-top:12px;"><canvas id="chartRecoverySleep"></canvas></div>
+    </div>`;
+}
+
+function wireRecoveryCheckIn(){
+  const card = document.getElementById('recoveryCheckInCard');
+  if(!card) return;
+  let pendingSoreness = null, pendingEnergy = null;
+  // Read the currently-selected scale value straight from the DOM (whichever button has .active)
+  // rather than a separate JS variable, so save always reflects exactly what's visibly selected.
+  function selectedScale(name){
+    const active = document.querySelector(`#rec${name[0].toUpperCase()+name.slice(1)}Row .scale-btn.active`);
+    return active ? parseInt(active.dataset.val) : null;
+  }
+  card.querySelectorAll('.scale-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const row = btn.parentElement;
+      row.querySelectorAll('.scale-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+  document.getElementById('recSaveBtn').addEventListener('click', async ()=>{
+    const hoursRaw = document.getElementById('recSleepHours').value;
+    const patch = {
+      sleepHours: hoursRaw!=='' ? parseFloat(hoursRaw) : null,
+      soreness: selectedScale('soreness'),
+      energy: selectedScale('energy'),
+    };
+    await recordRecoveryEntry(patch);
+    const meta = document.getElementById('recSaveMeta');
+    if(meta) meta.textContent = 'Saved — today\'s check-in is logged.';
+    renderRecoveryWeekStats();
+    renderRecoveryTrendChart();
+    // Overview and the Nutrition page both surface recovery-derived context; keep them in sync
+    // immediately rather than waiting for a manual tab switch to pick up the new entry.
+    renderOverview();
+  });
+}
+
+async function renderRecoveryWeekStats(){
+  const el = document.getElementById('recoveryWeekStats');
+  if(!el) return;
+  const log = await getJSON('recovery-log', []);
+  const cutoff = new Date(Date.now() - 6*86400000).toISOString().slice(0,10); // last 7 days incl. today
+  const week = log.filter(e=> e.date >= cutoff);
+  const avg = (key)=>{
+    const vals = week.map(e=>e[key]).filter(v=> v!=null && !isNaN(v));
+    if(!vals.length) return null;
+    return Math.round((vals.reduce((a,b)=>a+b,0) / vals.length) * 10) / 10;
+  };
+  const avgSleep = avg('sleepHours');
+  const avgSoreness = avg('soreness');
+  const avgEnergy = avg('energy');
+  el.innerHTML = `
+    <div class="card stat-card"><div class="stat-label">Check-Ins</div><div class="stat-value">${week.length}<small>/7</small></div></div>
+    <div class="card stat-card"><div class="stat-label">Avg Sleep</div><div class="stat-value">${avgSleep!=null?avgSleep:'—'}${avgSleep!=null?'<small>h</small>':''}</div></div>
+    <div class="card stat-card"><div class="stat-label">Avg Soreness</div><div class="stat-value">${avgSoreness!=null?avgSoreness:'—'}${avgSoreness!=null?'<small>/5</small>':''}</div></div>
+    <div class="card stat-card"><div class="stat-label">Avg Energy</div><div class="stat-value">${avgEnergy!=null?avgEnergy:'—'}${avgEnergy!=null?'<small>/5</small>':''}</div></div>`;
+}
+
+async function renderRecoveryTrendChart(retryCount){
+  retryCount = retryCount || 0;
+  const canvas = document.getElementById('chartRecoverySleep');
+  if(!canvas) return; // view was switched away before this resolved
+  if(typeof Chart === 'undefined'){
+    if(retryCount >= 30){
+      canvas.parentElement.innerHTML = `<p class="muted" style="padding-top:70px;text-align:center;">Charts failed to load — check your internet connection and refresh the page.</p>`;
+      return;
+    }
+    setTimeout(()=>renderRecoveryTrendChart(retryCount+1), 300);
+    return;
+  }
+  destroyChart('recoverySleep');
+  const log = await getJSON('recovery-log', []);
+  const cutoff = new Date(Date.now() - 13*86400000).toISOString().slice(0,10); // last 14 days incl. today
+  const window = log.filter(e=> e.date >= cutoff && e.sleepHours!=null).slice().sort((a,b)=> a.date.localeCompare(b.date));
+  if(!window.length){
+    canvas.parentElement.innerHTML = `<p class="muted" style="padding-top:70px;text-align:center;">Log a few nights of sleep above to see your trend here.</p>`;
+    return;
+  }
+  CHART_INSTANCES.recoverySleep = new Chart(canvas, {
+    type: 'line',
+    data: { labels: window.map(r=>r.date), datasets: [
+      { data: window.map(r=>r.sleepHours), borderColor: CHART_COLORS.blue, backgroundColor: 'rgba(10,108,255,.08)', fill:true, tension:.3, pointRadius:3, pointBackgroundColor: CHART_COLORS.blue },
+      { data: window.map(()=>7.5), borderColor: CHART_COLORS.gray, borderDash:[4,4], pointRadius:0, fill:false },
+      { data: window.map(()=>9), borderColor: CHART_COLORS.gray, borderDash:[4,4], pointRadius:0, fill:false },
+    ]},
+    options: baseChartOptions(),
+  });
+}
+
 async function renderRecovery(){
   const el = document.getElementById('view-recovery');
   const activeId = await getJSON('active-program', null);
@@ -3988,6 +4133,7 @@ async function renderRecovery(){
     const custom = await getJSON('custom-programs', []);
     activeProg = custom.find(p=>p.id===activeId) || null;
   }
+  const todayEntry = await getTodayRecoveryEntry();
 
   if(activeProg && activeProg.meta){
     const m = activeProg.meta;
@@ -3997,6 +4143,9 @@ async function renderRecovery(){
         <div class="page-title">Recovery Dashboard</div>
         <div class="page-sub">Rest intervals, warm-up protocol, and coaching rules — pulled straight from your active program.</div>
       </div>
+
+      ${recoveryCheckInHTML(todayEntry)}
+
       <div class="grid g4" style="margin-bottom:14px;">
         <div class="card stat-card"><div class="stat-label">Session Duration</div><div class="stat-value" style="font-size:16px;">${m.duration||'—'}</div></div>
         <div class="card stat-card"><div class="stat-label">Rest Intervals</div><div class="stat-value" style="font-size:15px;">${m.restNotes||'—'}</div></div>
@@ -4020,6 +4169,9 @@ async function renderRecovery(){
         </div>
       </div>
     `;
+    wireRecoveryCheckIn();
+    renderRecoveryWeekStats();
+    renderRecoveryTrendChart();
     return;
   }
 
@@ -4029,6 +4181,9 @@ async function renderRecovery(){
       <div class="page-title">Recovery Dashboard</div>
       <div class="page-sub">Recovery is a training input, not an afterthought — built in through intensity variation and regular trekking prep.</div>
     </div>
+
+    ${recoveryCheckInHTML(todayEntry)}
+
     <div class="grid g2">
       <div class="card">
         <div class="icon-chip">${ICONS.mountain}</div>
@@ -4050,7 +4205,12 @@ async function renderRecovery(){
       <p class="muted" style="margin-top:6px;">After the athletic lower-body session: 20–30 minutes, easy conversational pace. Purpose is blood flow, not fitness.</p>
     </div>
   `;
+  wireRecoveryCheckIn();
+  renderRecoveryWeekStats();
+  renderRecoveryTrendChart();
 }
+
+
 
 /* ---------- TIMELINE ---------- */
 async function renderTimeline(){
