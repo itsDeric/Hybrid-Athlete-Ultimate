@@ -119,6 +119,20 @@ body{
 .sync-actions{display:flex;gap:6px;margin-top:8px;}
 .sync-actions button{flex:1;background:rgba(255,255,255,.08);color:#fff;border:none;border-radius:7px;padding:6px;font-family:var(--sans);font-size:10.5px;font-weight:700;cursor:pointer;}
 .sync-actions button:hover{background:rgba(255,255,255,.15);}
+.sync-actions.secondary-row{margin-top:6px;}
+.backup-status-line{font-size:10px;color:var(--gray-400);margin-top:6px;line-height:1.5;}
+.backup-status-line b{color:#fff;}
+
+/* Import confirmation — a true modal (not the mobile-only more-sheet) since Import is destructive
+   and reachable from both the desktop sidebar and the mobile More sheet; one shared overlay avoids
+   duplicating the confirm UI (and its state) in two places. */
+.import-confirm-overlay{display:none;position:fixed;inset:0;background:rgba(10,10,12,.6);z-index:2000;align-items:center;justify-content:center;padding:20px;}
+.import-confirm-overlay.open{display:flex;animation:fade .15s ease;}
+.import-confirm-card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);padding:22px;max-width:420px;width:100%;}
+.import-confirm-card h3{font-size:16px;margin-bottom:8px;}
+.import-confirm-card .muted{color:var(--gray-600);font-size:13px;line-height:1.6;}
+.import-confirm-actions{display:flex;gap:10px;margin-top:18px;}
+.import-confirm-actions .btn{flex:1;justify-content:center;}
 .countdown-label{font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);font-weight:700;}
 .countdown-num{font-family:var(--mono);font-size:26px;font-weight:600;color:#fff;margin-top:4px;}
 .countdown-sub{font-size:11px;color:var(--gray-400);margin-top:1px;}
@@ -467,8 +481,13 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
         <button id="exportDataBtn">Export Data</button>
         <button id="importDataBtn">Import Data</button>
       </div>
+      <div class="sync-actions secondary-row" id="autoBackupRow" style="display:none;">
+        <button id="autoBackupBtn">Connect Backup Folder</button>
+      </div>
       <input type="file" id="importFileInput" accept="application/json" style="display:none;">
       <div class="sync-meta" id="backupMeta" style="margin-top:8px;">Saves a file to your device — free, no account needed.</div>
+      <div class="backup-status-line" id="backupStatusLine"></div>
+      <button class="sync-actions secondary-row" id="undoLastImportBtn" style="display:none;width:100%;background:rgba(224,53,43,.18);color:#fff;border:none;border-radius:7px;padding:6px;font-family:var(--sans);font-size:10.5px;font-weight:700;cursor:pointer;margin-top:6px;">Undo Last Import</button>
     </div>
     <div class="sidebar-foot" id="sidebarCountdown" style="display:none;">
       <div class="countdown-label" id="countdownLabel">Goal</div>
@@ -488,6 +507,19 @@ footer.printnote{margin-top:60px;padding-top:18px;border-top:1px solid var(--gra
       <div class="more-sheet-divider"></div>
       <button class="more-sheet-item" id="moreExportBtn">Export Data</button>
       <button class="more-sheet-item" id="moreImportBtn">Import Data</button>
+      <button class="more-sheet-item" id="moreAutoBackupBtn" style="display:none;">Connect Backup Folder</button>
+    </div>
+  </div>
+
+  <!-- ============ IMPORT CONFIRMATION (shared modal — desktop sidebar and mobile More sheet both open this) ============ -->
+  <div class="import-confirm-overlay" id="importConfirmOverlay">
+    <div class="import-confirm-card">
+      <h3>Confirm Import</h3>
+      <p class="muted" id="importConfirmText"></p>
+      <div class="import-confirm-actions">
+        <button class="btn ghost" id="importConfirmCancel">Cancel</button>
+        <button class="btn" style="background:var(--red);" id="importConfirmApply">Replace My Data</button>
+      </div>
     </div>
   </div>
 
@@ -876,6 +908,19 @@ async function backfillPRs(){
 /* ============================================================
    BACKUP & RESTORE — free, local file export/import.
    No account, no sign-in, works for anyone immediately.
+
+   SAFETY NET (added after an audit flagged this as the single biggest risk in the app): every byte
+   of training history lives only in this device's localStorage. Before this, backup was a manual
+   export the athlete had to remember to run, AND the documented fix for the service-worker caching
+   bug was "Clear site data in DevTools" — the exact same action that permanently destroys everything,
+   with zero warning. Below adds three independent layers, all still free and account-free:
+     1. A dismissible reminder banner (renderOverview) if it's been a while since any backup.
+     2. An OPTIONAL automatic backup to a folder the athlete picks once (e.g. their OS's own free
+        Google Drive/OneDrive/iCloud sync folder) via the File System Access API — no new account,
+        just reuses whatever free cloud sync the athlete's OS already provides. Chrome/Edge only
+        (desktop + Android); gracefully absent everywhere else, where the reminder banner is the net.
+     3. A one-tap "safety copy" taken automatically before every Import overwrite, so a wrong-file
+        import (a real, easy mistake) can be undone without having to dig up an old export file.
 ============================================================ */
 function collectLocalSnapshot(){
   const snap = {};
@@ -885,6 +930,27 @@ function collectLocalSnapshot(){
     }
   });
   return snap;
+}
+
+// Backup bookkeeping (last export/auto-backup times, snooze state) is deliberately stored OUTSIDE
+// the hybrid-athlete: namespace collectLocalSnapshot() reads, so it never gets swept into export
+// files or overwritten by an import — it's device-local infrastructure state, not training data.
+const BACKUP_META_KEY = 'hybrid-athlete-infra:backup-meta';
+function getBackupMeta(){
+  try{ return JSON.parse(localStorage.getItem(BACKUP_META_KEY)) || {}; }catch(e){ return {}; }
+}
+function setBackupMeta(patch){
+  const meta = Object.assign(getBackupMeta(), patch);
+  try{ localStorage.setItem(BACKUP_META_KEY, JSON.stringify(meta)); }catch(e){}
+  return meta;
+}
+
+// Pre-import safety snapshot lives under the same non-exported infra namespace — deliberately outside
+// LS_PREFIX so it can never be the thing an incoming import overwrites, and never leaks into an
+// export file (it's a device-local undo point, not portable training data).
+const PRE_IMPORT_SAFETY_KEY = 'hybrid-athlete-infra:pre-import-safety';
+function getPreImportSafety(){
+  try{ return JSON.parse(localStorage.getItem(PRE_IMPORT_SAFETY_KEY)) || null; }catch(e){ return null; }
 }
 
 function exportData(){
@@ -899,35 +965,261 @@ function exportData(){
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+  const now = new Date().toISOString();
+  setBackupMeta({ lastExportAt: now, lastBackupAt: now });
   const meta = document.getElementById('backupMeta');
   if(meta) meta.textContent = 'Backup downloaded — keep it somewhere safe.';
+  refreshBackupStatusLine();
 }
 
 function importData(){
   document.getElementById('importFileInput').click();
 }
 
+// Import is destructive (a full overwrite), so unlike the old version this never applies data the
+// instant a file is picked. It validates the file, saves a safety copy of what's currently on the
+// device, then shows a real confirmation naming what's in the file before anything is touched.
+let pendingImport = null;
 function handleImportFile(e){
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
   reader.onload = (evt)=>{
+    const metaEl = document.getElementById('backupMeta');
+    let data;
     try{
-      const data = JSON.parse(evt.target.result);
-      Object.keys(data).forEach(k=>{
-        localStorage.setItem(LS_PREFIX+k, JSON.stringify(data[k]));
-      });
-      const meta = document.getElementById('backupMeta');
-      if(meta) meta.textContent = 'Backup restored — reloading…';
-      setTimeout(()=> location.reload(), 700);
+      data = JSON.parse(evt.target.result);
     }catch(err){
-      const meta = document.getElementById('backupMeta');
-      if(meta) meta.textContent = 'That file could not be read — make sure it\'s a real backup file.';
+      if(metaEl) metaEl.textContent = 'That file could not be read — make sure it\'s a real backup file.';
       console.error('[Import] failed:', err);
+      return;
     }
+    const isPlainObject = data && typeof data === 'object' && !Array.isArray(data);
+    const keys = isPlainObject ? Object.keys(data) : [];
+    if(!isPlainObject || keys.length === 0){
+      if(metaEl) metaEl.textContent = "That doesn't look like a Hybrid Athlete backup file — nothing was imported.";
+      return;
+    }
+    pendingImport = data;
+    showImportConfirm(keys);
   };
   reader.readAsText(file);
   e.target.value = ''; // reset so re-selecting the same file still fires change
+}
+
+function showImportConfirm(keys){
+  const overlay = document.getElementById('importConfirmOverlay');
+  const text = document.getElementById('importConfirmText');
+  const preview = keys.slice(0,5).join(', ') + (keys.length>5 ? `, +${keys.length-5} more` : '');
+  text.textContent = `This file contains ${keys.length} data type${keys.length===1?'':'s'} (${preview}). Importing replaces everything currently on this device — a safety copy of what you have now will be saved first, so this can be undone.`;
+  overlay.classList.add('open');
+}
+function hideImportConfirm(){
+  document.getElementById('importConfirmOverlay').classList.remove('open');
+  pendingImport = null;
+}
+function applyPendingImport(){
+  if(!pendingImport) return;
+  // Safety copy of what's on the device RIGHT NOW, taken immediately before the overwrite — stored
+  // outside the exportable namespace (see PRE_IMPORT_SAFETY_KEY) so the incoming import data can
+  // never itself clobber the thing meant to undo it.
+  const safety = { snapshot: collectLocalSnapshot(), savedAt: new Date().toISOString() };
+  try{ localStorage.setItem(PRE_IMPORT_SAFETY_KEY, JSON.stringify(safety)); }catch(e){ /* non-fatal */ }
+
+  Object.keys(pendingImport).forEach(k=>{
+    localStorage.setItem(LS_PREFIX+k, JSON.stringify(pendingImport[k]));
+  });
+  const now = new Date().toISOString();
+  setBackupMeta({ lastBackupAt: now }); // importing a real backup file counts as "backed up" too
+  hideImportConfirm();
+  const metaEl = document.getElementById('backupMeta');
+  if(metaEl) metaEl.textContent = 'Backup restored — reloading…';
+  setTimeout(()=> location.reload(), 700);
+}
+// One-tap undo for the single most common accident: importing the wrong file. Only available for the
+// most recent import in this browser (the safety copy is overwritten by each new import, by design —
+// it is an undo point, not a version history).
+function undoLastImport(){
+  const safety = getPreImportSafety();
+  if(!safety || !safety.snapshot) return;
+  Object.keys(safety.snapshot).forEach(k=>{
+    localStorage.setItem(LS_PREFIX+k, JSON.stringify(safety.snapshot[k]));
+  });
+  localStorage.removeItem(PRE_IMPORT_SAFETY_KEY);
+  location.reload();
+}
+
+/* ---------- Automatic backup to a folder the athlete picks once (File System Access API) ----------
+   Entirely free and account-free: it reuses whatever cloud sync the athlete's OS already has on that
+   folder (a Google Drive/OneDrive/iCloud desktop-synced folder works great) rather than standing up
+   any new infrastructure. Chrome/Edge only (desktop + Android) — feature-detected everywhere it's
+   used, and the reminder banner (see renderOverview) is the fallback net where it's unavailable. */
+const AUTO_BACKUP_SUPPORTED = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+const AUTO_BACKUP_MAX_FILES = 10; // rolling window — protects against a bug corrupting the single latest save
+const AUTO_BACKUP_MIN_INTERVAL_MS = 6*60*60*1000; // don't write more than once per 6h of app use
+
+const BACKUP_IDB_NAME = 'hybrid-athlete-backup';
+const BACKUP_IDB_STORE = 'handles';
+function openBackupIDB(){
+  return new Promise((resolve, reject)=>{
+    const req = indexedDB.open(BACKUP_IDB_NAME, 1);
+    req.onupgradeneeded = ()=> req.result.createObjectStore(BACKUP_IDB_STORE);
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function idbGet(key){
+  const db = await openBackupIDB();
+  return new Promise((resolve,reject)=>{
+    const req = db.transaction(BACKUP_IDB_STORE,'readonly').objectStore(BACKUP_IDB_STORE).get(key);
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error);
+  });
+}
+async function idbSet(key, val){
+  const db = await openBackupIDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(BACKUP_IDB_STORE,'readwrite');
+    tx.objectStore(BACKUP_IDB_STORE).put(val, key);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+async function idbDelete(key){
+  const db = await openBackupIDB();
+  return new Promise((resolve,reject)=>{
+    const tx = db.transaction(BACKUP_IDB_STORE,'readwrite');
+    tx.objectStore(BACKUP_IDB_STORE).delete(key);
+    tx.oncomplete = ()=> resolve();
+    tx.onerror = ()=> reject(tx.error);
+  });
+}
+
+async function connectBackupFolder(){
+  if(!AUTO_BACKUP_SUPPORTED) return false;
+  try{
+    const handle = await window.showDirectoryPicker({ id:'hybrid-athlete-backup', mode:'readwrite' });
+    await idbSet('backup-dir', handle);
+    setBackupMeta({ autoBackupConnectedAt: new Date().toISOString() });
+    await performAutoBackupWrite(handle);
+    return true;
+  }catch(e){
+    // Includes the athlete simply cancelling the folder picker — not an error worth surfacing.
+    return false;
+  }
+}
+async function disconnectBackupFolder(){
+  await idbDelete('backup-dir').catch(()=>{});
+  setBackupMeta({ autoBackupConnectedAt: null });
+}
+// Never prompts — queryPermission() only checks silently. If permission was revoked (or the folder
+// moved/deleted) this just returns null and the app falls back to the manual reminder banner, rather
+// than surprising the athlete with a permission dialog on a random app load.
+async function getConnectedBackupHandle(){
+  if(!AUTO_BACKUP_SUPPORTED) return null;
+  try{
+    const handle = await idbGet('backup-dir');
+    if(!handle) return null;
+    const perm = await handle.queryPermission({ mode:'readwrite' });
+    return perm === 'granted' ? handle : null;
+  }catch(e){ return null; }
+}
+async function performAutoBackupWrite(dirHandle){
+  const snap = collectLocalSnapshot();
+  if(!Object.keys(snap).length) return false; // nothing logged yet — nothing to protect
+  const stamp = new Date().toISOString().replace(/[:.]/g,'-');
+  const filename = `hybrid-athlete-autobackup-${stamp}.json`;
+  try{
+    const fileHandle = await dirHandle.getFileHandle(filename, { create:true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(snap, null, 2));
+    await writable.close();
+    const now = new Date().toISOString();
+    setBackupMeta({ lastAutoBackupAt: now, lastBackupAt: now });
+    await pruneOldAutoBackups(dirHandle);
+    return true;
+  }catch(e){
+    console.error('[AutoBackup] write failed:', e);
+    return false;
+  }
+}
+async function pruneOldAutoBackups(dirHandle){
+  try{
+    const names = [];
+    for await (const [name, handle] of dirHandle.entries()){
+      if(handle.kind==='file' && name.startsWith('hybrid-athlete-autobackup-')) names.push(name);
+    }
+    names.sort(); // the timestamp is embedded in the filename, so lexical sort = chronological sort
+    const excess = names.length - AUTO_BACKUP_MAX_FILES;
+    for(let i=0; i<excess; i++){ await dirHandle.removeEntry(names[i]).catch(()=>{}); }
+  }catch(e){ /* non-fatal — worst case old files accumulate until the next successful prune */ }
+}
+// Called once on every app load. Silent no-op unless a folder is connected AND enough time has
+// passed — this is a background safety net, not something that should ever interrupt the athlete.
+async function maybeRunAutoBackup(){
+  const handle = await getConnectedBackupHandle();
+  if(!handle) return;
+  const meta = getBackupMeta();
+  const last = meta.lastAutoBackupAt ? new Date(meta.lastAutoBackupAt).getTime() : 0;
+  if(Date.now() - last < AUTO_BACKUP_MIN_INTERVAL_MS) return;
+  await performAutoBackupWrite(handle);
+}
+// Used by the reminder banner's "Back up now" button — prefers the connected folder (silent, no
+// dialog) and only falls back to a manual file download if no folder is connected.
+async function runBestAvailableBackup(){
+  const handle = await getConnectedBackupHandle();
+  if(handle) await performAutoBackupWrite(handle);
+  else exportData();
+}
+
+function refreshBackupStatusLine(){
+  const line = document.getElementById('backupStatusLine');
+  if(!line) return;
+  const meta = getBackupMeta();
+  const parts = [];
+  if(meta.autoBackupConnectedAt) parts.push('<b>Auto-backup folder connected</b>');
+  parts.push(meta.lastBackupAt ? `Last backup: <b>${timeAgoLabel(meta.lastBackupAt)}</b>` : 'No backup yet');
+  line.innerHTML = parts.join(' · ');
+}
+function timeAgoLabel(iso){
+  const d = daysSinceISO(iso);
+  if(d < 1) return 'today';
+  if(d < 2) return 'yesterday';
+  return `${Math.floor(d)} days ago`;
+}
+function daysSinceISO(iso){
+  if(!iso) return Infinity;
+  return (Date.now() - new Date(iso).getTime()) / 86400000;
+}
+
+async function wireAutoBackupButtons(){
+  const show = AUTO_BACKUP_SUPPORTED;
+  const row = document.getElementById('autoBackupRow');
+  const moreBtn = document.getElementById('moreAutoBackupBtn');
+  if(row) row.style.display = show ? 'flex' : 'none';
+  if(moreBtn) moreBtn.style.display = show ? 'block' : 'none';
+  if(!show) return;
+
+  async function refreshLabel(){
+    const connected = !!(await getConnectedBackupHandle());
+    const label = connected ? 'Backup Folder Connected ✓' : 'Connect Backup Folder';
+    const btn = document.getElementById('autoBackupBtn');
+    if(btn) btn.textContent = label;
+    if(moreBtn) moreBtn.textContent = label;
+    refreshBackupStatusLine();
+  }
+  async function handleClick(){
+    const connected = !!(await getConnectedBackupHandle());
+    if(connected){
+      await disconnectBackupFolder();
+    } else {
+      await connectBackupFolder();
+    }
+    await refreshLabel();
+  }
+  document.getElementById('autoBackupBtn').addEventListener('click', handleClick);
+  moreBtn.addEventListener('click', handleClick);
+  await refreshLabel();
 }
 
 function wireBackupButtons(){
@@ -938,6 +1230,35 @@ function wireBackupButtons(){
   // hidden below the 860px breakpoint — same underlying functions, just reachable from the sheet too.
   document.getElementById('moreExportBtn').addEventListener('click', exportData);
   document.getElementById('moreImportBtn').addEventListener('click', importData);
+  // Shared modal (see CSS/HTML comments) so both entry points above funnel into the same confirm step.
+  document.getElementById('importConfirmCancel').addEventListener('click', hideImportConfirm);
+  document.getElementById('importConfirmApply').addEventListener('click', applyPendingImport);
+  wireUndoImportButton();
+  wireAutoBackupButtons();
+  refreshBackupStatusLine();
+}
+
+// Same inline "tap again to confirm" pattern already used for deleting a program (this app avoids
+// confirm()/alert() — they're blocked in the sandboxed preview, and inline state is more honest UI
+// anyway). Only shown at all when there's actually something to undo.
+function wireUndoImportButton(){
+  const btn = document.getElementById('undoLastImportBtn');
+  if(!btn) return;
+  const safety = getPreImportSafety();
+  btn.style.display = safety ? 'block' : 'none';
+  if(!safety) return;
+  btn.addEventListener('click', ()=>{
+    if(btn.dataset.confirming !== '1'){
+      btn.dataset.confirming = '1';
+      const original = btn.textContent;
+      btn.textContent = 'Tap again to confirm';
+      const revert = ()=>{ if(btn.dataset.confirming==='1'){ btn.dataset.confirming='0'; btn.textContent = original; } };
+      btn._revertTimer = setTimeout(revert, 3000);
+      return;
+    }
+    clearTimeout(btn._revertTimer);
+    undoLastImport();
+  });
 }
 
 
@@ -2081,6 +2402,51 @@ async function renderTrainingGoals(){
   });
 }
 
+/* ---------- Backup reminder banner — the universal fallback (works on iOS Safari too, where the
+   auto-backup-folder feature above isn't available). Shown on Overview since it's the first/most-
+   viewed screen. Deliberately non-blocking and dismissible — this is a safety net, not a nag wall. */
+const BACKUP_REMINDER_DAYS = 7;
+function hasAnyLoggedData(){
+  return Object.keys(localStorage).some(k=> k.startsWith(LS_PREFIX));
+}
+function shouldShowBackupReminder(){
+  if(!hasAnyLoggedData()) return false; // nothing at risk yet on a fresh install
+  const meta = getBackupMeta();
+  if(meta.reminderSnoozedUntil && Date.now() < new Date(meta.reminderSnoozedUntil).getTime()) return false;
+  return daysSinceISO(meta.lastBackupAt) >= BACKUP_REMINDER_DAYS;
+}
+function backupReminderHTML(){
+  if(!shouldShowBackupReminder()) return '';
+  const meta = getBackupMeta();
+  const lastLabel = meta.lastBackupAt ? timeAgoLabel(meta.lastBackupAt) : 'never';
+  return `
+  <div class="card" id="backupReminderCard" style="margin-bottom:14px;border:1px solid rgba(201,138,18,.35);background:rgba(201,138,18,.06);">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h3 style="color:var(--amber);">Back up your training data</h3>
+        <p class="muted" style="margin-top:4px;">Last backup: ${lastLabel}. Everything lives only on this device — losing it (a full browser data clear, a lost phone) can't be undone without one.</p>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <button class="btn ghost" id="backupReminderSnooze">Remind me later</button>
+        <button class="btn" id="backupReminderAction">Back up now</button>
+      </div>
+    </div>
+  </div>`;
+}
+function wireBackupReminderCard(){
+  const actionBtn = document.getElementById('backupReminderAction');
+  const snoozeBtn = document.getElementById('backupReminderSnooze');
+  if(!actionBtn) return;
+  actionBtn.addEventListener('click', async ()=>{
+    await runBestAvailableBackup();
+    renderOverview();
+  });
+  snoozeBtn.addEventListener('click', ()=>{
+    setBackupMeta({ reminderSnoozedUntil: new Date(Date.now()+3*86400000).toISOString() });
+    renderOverview();
+  });
+}
+
 async function renderOverview(){
   const el = document.getElementById('view-overview');
   const profile = { weight: await getCurrentWeight() }; // A1: weight-log is authoritative, not a raw profile read
@@ -2175,6 +2541,8 @@ async function renderOverview(){
       <div class="page-sub">${headSub}</div>
     </div>
 
+    ${backupReminderHTML()}
+
     <div class="card" style="margin-bottom:14px;${!todayIsRest?'cursor:pointer;':''}" id="ovTodayCard">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <h3>What's Today — ${todayName}</h3>
@@ -2231,6 +2599,8 @@ async function renderOverview(){
   if(todayJumpHandler){
     document.getElementById('ovTodayCard').addEventListener('click', todayJumpHandler);
   }
+
+  wireBackupReminderCard();
 
   // Start weight
   const disp = document.getElementById('ovWeightDisplay');
@@ -4406,6 +4776,9 @@ migrateToSharedExerciseWeights().then(()=> backfillPRs()).then(()=> migrateProfi
   showView(initialView);
   maybeShowOnboarding();
   wireBackupButtons();
+  // Silent background safety-net write — see the AUTO_BACKUP block above. No-ops instantly unless a
+  // folder is connected and the interval has actually elapsed, so this never delays first paint.
+  maybeRunAutoBackup();
 });
 
 if('serviceWorker' in navigator){
