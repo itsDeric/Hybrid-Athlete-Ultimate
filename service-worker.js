@@ -1,6 +1,6 @@
 // Bump this version string on every deploy that changes app behavior — forces old installed
 // PWAs/APKs to pick up the new code instead of silently serving a stale cached index.html forever.
-const CACHE_NAME = 'hybrid-athlete-v2';
+const CACHE_NAME = 'hybrid-athlete-v3';
 const ASSETS = ['./index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
