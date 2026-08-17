@@ -220,6 +220,11 @@ td.num,th.num{font-family:var(--mono);}
 .scale-btn:hover{border-color:var(--gray-400);}
 .scale-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
 .scale-hint{display:flex;justify-content:space-between;font-size:10.5px;color:var(--gray-400);margin-top:4px;}
+.quick-feel-row{display:flex;gap:8px;}
+.quick-feel-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 0;border-radius:12px;border:1px solid var(--gray-200);background:#fff;cursor:pointer;font-size:22px;}
+.quick-feel-btn:hover{border-color:var(--gray-400);}
+.quick-feel-btn.active{background:var(--blue-dim);border-color:var(--blue);}
+.quick-feel-btn span{font-size:11px;font-weight:700;color:var(--gray-600);}
 .tag.gray{background:var(--gray-100);color:var(--gray-600);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
@@ -2626,7 +2631,7 @@ async function renderOverview(){
   }
 
   // Readiness — computed fresh every render from today's Recovery check-in (see computeReadiness()).
-  const todayRecoveryEntry = await getTodayRecoveryEntry();
+  const todayRecoveryEntry = await getTodayRecoveryEntry() || {};
   const readinessScore = computeReadiness(todayRecoveryEntry);
   const readinessTag = readinessTagClass(readinessScore);
 
@@ -2656,9 +2661,16 @@ async function renderOverview(){
         </div>
         <p class="muted" style="margin-top:12px;">${todaysFocusText(readinessScore)}</p>
       ` : `
-        <p class="muted" style="margin-top:8px;">Log today's sleep, soreness, and energy in Recovery to see your Readiness score.</p>
-        <button class="btn" id="ovGoRecoveryBtn" style="margin-top:10px;">Log Today's Check-In</button>
+        <p class="muted" style="margin-top:8px;">Tap how you're feeling to get today's Readiness score — takes one second.</p>
       `}
+      <div style="margin-top:14px;">
+        <div class="quick-feel-row" id="ovQuickFeelRow">
+          <button class="quick-feel-btn ${todayRecoveryEntry.energy===1?'active':''}" data-energy="1">😩<span>Rough</span></button>
+          <button class="quick-feel-btn ${todayRecoveryEntry.energy===3?'active':''}" data-energy="3">😐<span>OK</span></button>
+          <button class="quick-feel-btn ${todayRecoveryEntry.energy===5?'active':''}" data-energy="5">💪<span>Great</span></button>
+        </div>
+        <p class="muted" style="margin-top:8px;font-size:11.5px;">Want to log sleep or soreness too? <a href="#" id="ovFullCheckInLink" style="color:var(--blue);font-weight:600;">Full check-in →</a></p>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:14px;${!todayIsRest?'cursor:pointer;':''}" id="ovTodayCard">
@@ -2720,8 +2732,17 @@ async function renderOverview(){
 
   wireBackupReminderCard();
 
-  const goRecoveryBtn = document.getElementById('ovGoRecoveryBtn');
-  if(goRecoveryBtn) goRecoveryBtn.addEventListener('click', ()=> showView('recovery'));
+  // Quick Readiness entry — one tap writes straight to today's recovery-log energy field via the
+  // same recordRecoveryEntry() the full Recovery check-in uses, so a quick tap here and a full
+  // check-in on the Recovery page are just two entry points into the same data, not two systems.
+  document.querySelectorAll('#ovQuickFeelRow .quick-feel-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      await recordRecoveryEntry({ energy: parseInt(btn.dataset.energy) });
+      renderOverview();
+    });
+  });
+  const fullCheckInLink = document.getElementById('ovFullCheckInLink');
+  if(fullCheckInLink) fullCheckInLink.addEventListener('click', (e)=>{ e.preventDefault(); showView('recovery'); });
 
   // Start weight
   const disp = document.getElementById('ovWeightDisplay');
