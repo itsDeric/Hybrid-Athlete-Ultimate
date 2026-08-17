@@ -781,6 +781,20 @@ const PRESET_TEMPLATES = [
    with no Claude account or internet connection required.
 ============================================================ */
 const LS_PREFIX = 'hybrid-athlete:';
+
+// HTML-escapes any user-entered text before it's interpolated into an innerHTML template. Added after
+// an audit flagged that none of the ~90 places user-typed text (profile name, program/exercise names,
+// goal text, custom units, sets/reps) gets inserted into the DOM had any escaping — harmless today
+// (single-user, local-only, so worst case is self-XSS), but a real stored-XSS risk the moment any
+// future feature lets one athlete's text render in another athlete's browser (shared programs,
+// leaderboards, etc). Escapes all five HTML-significant characters, so it's safe in both element
+// content (<div>${esc(x)}</div>) and attribute value (value="${esc(x)}") contexts. Deliberately NOT
+// applied at data-entry/storage time (e.g. when saving a typed program name) — only at the point of
+// insertion into HTML — so raw, un-mangled text is what's stored, exported, and imported.
+function esc(str){
+  if(str === null || str === undefined) return '';
+  return String(str).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
 async function getJSON(key, fallback){
   try{
     const raw = localStorage.getItem(LS_PREFIX+key);
@@ -1571,7 +1585,7 @@ async function renderProfile(){
     <div class="card" style="margin-bottom:16px;">
       <h3>Summary</h3>
       <div class="grid g4" style="margin-top:12px;">
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Name</div><div class="stat-value" style="font-size:16px;">${p.name||'Not set'}</div></div>
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Name</div><div class="stat-value" style="font-size:16px;">${esc(p.name)||'Not set'}</div></div>
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Weight</div><div class="stat-value">${nz(p.weight,' kg')}</div></div>
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Height</div><div class="stat-value">${nz(p.height,' cm')}</div></div>
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Experience</div><div class="stat-value" style="font-size:16px;">${p.experience||'Not set'}</div></div>
@@ -1581,7 +1595,7 @@ async function renderProfile(){
     <div class="card" style="margin-bottom:16px;">
       <h3>Identity</h3>
       <div class="grid g2" style="margin-top:12px;">
-        <div class="field"><label>Name</label><input id="pfName" type="text" placeholder="Your name" value="${p.name}"></div>
+        <div class="field"><label>Name</label><input id="pfName" type="text" placeholder="Your name" value="${esc(p.name)}"></div>
         <div class="field"><label>Age</label><input id="pfAge" type="number" placeholder="e.g. 28" value="${p.age}"></div>
         <div class="field"><label>Gender (optional)</label>
           <select id="pfGender">
@@ -1649,8 +1663,8 @@ async function renderProfile(){
       <h3>Goals At This Stage</h3>
       <p class="muted" style="margin-top:2px;">Just captured here for now — the full Training Goals system (tracking progress toward these) is a separate future feature.</p>
       <div class="grid g2" style="margin-top:12px;">
-        <div class="field"><label>Primary Objective</label><input id="pfPrimaryGoal" type="text" placeholder="e.g. Build strength" value="${p.primaryGoal}"></div>
-        <div class="field"><label>Secondary Objective</label><input id="pfSecondaryGoal" type="text" placeholder="e.g. Improve 5K time" value="${p.secondaryGoal}"></div>
+        <div class="field"><label>Primary Objective</label><input id="pfPrimaryGoal" type="text" placeholder="e.g. Build strength" value="${esc(p.primaryGoal)}"></div>
+        <div class="field"><label>Secondary Objective</label><input id="pfSecondaryGoal" type="text" placeholder="e.g. Improve 5K time" value="${esc(p.secondaryGoal)}"></div>
       </div>
     </div>
 
@@ -1923,7 +1937,7 @@ async function renderTrainingGoals(){
         <span class="tag ${g.designation==='primary'?'blue':'gray'}">${g.designation==='primary'?'PRIMARY GOAL':'SECONDARY GOAL'}</span>
         <span class="tag gray">${g.category}</span>
       </div>
-      <h3 style="margin-top:10px;">${g.name}</h3>
+      <h3 style="margin-top:10px;">${esc(g.name)}</h3>
       <div class="grid g2" style="margin-top:10px;">
         <div><div class="stat-label">Current${isAuto?' <span class="tag" style="background:rgba(31,177,90,.12);color:var(--green);font-size:9px;margin-left:4px;">LIVE</span>':''}</div><div class="stat-value" style="font-size:20px;">${hasCurrent?formatGoalValue(g, effectiveCurrent):'—'}</div></div>
         <div><div class="stat-label">Target</div><div class="stat-value" style="font-size:20px;">${formatGoalValue(g, g.targetValue)}</div></div>
@@ -2011,7 +2025,7 @@ async function renderTrainingGoals(){
       ${completed.map(g=>`
         <div class="card" style="margin-bottom:10px;opacity:.75;">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <div><span class="tag green">COMPLETED</span> <b style="margin-left:8px;">${g.name}</b></div>
+            <div><span class="tag green">COMPLETED</span> <b style="margin-left:8px;">${esc(g.name)}</b></div>
             <div class="goal-card-actions" style="margin-top:0;">
               <button data-reactivategoal="${g.id}">Reactivate</button>
               <button class="danger" data-deletegoal="${g.id}">Delete</button>
@@ -2037,12 +2051,12 @@ async function renderTrainingGoals(){
         </div>`;
     } else {
       box.innerHTML = `
-        <div class="field"><label>Target${metric.unit?` (${metric.unit})`:''}</label>
-          <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
+        <div class="field"><label>Target${metric.unit?` (${esc(metric.unit)})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${esc(metric.unit)}</span>`:''}</div>
         </div>
         ${metric.customizable ? `
         <div class="goal-form-grid" style="margin-top:12px;">
-          <div class="field"><label>Unit (optional)</label><input id="gfCustomUnit" type="text" placeholder="e.g. reps, cm" value="${metric.unit||''}"></div>
+          <div class="field"><label>Unit (optional)</label><input id="gfCustomUnit" type="text" placeholder="e.g. reps, cm" value="${esc(metric.unit||'')}"></div>
           <div class="field"><label>Direction</label>
             <select id="gfCustomDirection">
               <option value="higher">Higher is better</option>
@@ -2091,8 +2105,8 @@ async function renderTrainingGoals(){
         </div>`;
     } else {
       box.innerHTML = `
-        <div class="field"><label>Current${metric.unit?` (${metric.unit})`:''}</label>
-          <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${metric.unit}</span>`:''}</div>
+        <div class="field"><label>Current${metric.unit?` (${esc(metric.unit)})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${esc(metric.unit)}</span>`:''}</div>
         </div>`;
     }
   }
@@ -2481,12 +2495,12 @@ async function renderOverview(){
     const restDays = 7 - trainDays;
     trainDaysCount = trainDays;
     rhythmHTML = `
-      <div><div class="stat-label">Program</div><div class="stat-value" style="font-size:14px;font-weight:700;">${activeProg.name}</div></div>
+      <div><div class="stat-label">Program</div><div class="stat-value" style="font-size:14px;font-weight:700;">${esc(activeProg.name)}</div></div>
       <div><div class="stat-label">Training Days</div><div class="stat-value">${trainDays}</div></div>
       <div><div class="stat-label">Rest Days</div><div class="stat-value">${restDays}</div></div>
       <div><div class="stat-label">Focus</div><div class="stat-value" style="font-size:14px;font-weight:700;">${activeProg.tag}</div></div>`;
     headTitle = activeProg.name;
-    headSub = `Currently following <b>${activeProg.name}</b> — ${activeProg.tag}. Switch programs any time from the list below.`;
+    headSub = `Currently following <b>${esc(activeProg.name)}</b> — ${activeProg.tag}. Switch programs any time from the list below.`;
   } else {
     trainDaysCount = WEEK_PLAN.filter(d=>d.type!=='rest').length;
     rhythmHTML = `
@@ -2509,7 +2523,7 @@ async function renderOverview(){
       todayHTML = `<p class="muted" style="margin-top:6px;">Full rest day. No session scheduled.</p>`;
       todayJumpHandler = null;
     } else {
-      todayHTML = `<div class="check-list" style="margin-top:8px;">${dayData.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${e.name} — ${e.sets}×${e.reps}${todayWeights[e.name]?' @ '+todayWeights[e.name]+'kg':''}</span></div>`).join('')}${dayData.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${dayData.exercises.length-5} more…</span></div>`:''}</div>`;
+      todayHTML = `<div class="check-list" style="margin-top:8px;">${dayData.exercises.slice(0,5).map(e=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${esc(e.name)} — ${esc(e.sets)}×${esc(e.reps)}${todayWeights[e.name]?' @ '+todayWeights[e.name]+'kg':''}</span></div>`).join('')}${dayData.exercises.length>5?`<div class="check-item" style="cursor:default;"><span class="label muted">+ ${dayData.exercises.length-5} more…</span></div>`:''}</div>`;
       todayJumpHandler = ()=>{
         GYM_STATE.activeDay = todayName;
         showView('gym');
@@ -2537,7 +2551,7 @@ async function renderOverview(){
   el.innerHTML = `
     <div class="page-head">
       <div class="eyebrow">Your Training Home</div>
-      <div class="page-title">${headTitle}</div>
+      <div class="page-title">${esc(headTitle)}</div>
       <div class="page-sub">${headSub}</div>
     </div>
 
@@ -2560,7 +2574,7 @@ async function renderOverview(){
           <button class="btn" style="padding:6px 10px;font-size:12px;" id="ovWeightSave">Save</button>
         </div>
       </div>
-      <div class="card stat-card"><div class="stat-label">Active Program</div><div class="stat-value" style="font-size:16px;">${headTitle}</div></div>
+      <div class="card stat-card"><div class="stat-label">Active Program</div><div class="stat-value" style="font-size:16px;">${esc(headTitle)}</div></div>
       <div class="card stat-card"><div class="stat-label">Training Days / Week</div><div class="stat-value">${trainDaysCount} <small>of 7</small></div></div>
     </div>
 
@@ -2568,20 +2582,20 @@ async function renderOverview(){
 
     <div class="grid g2" style="align-items:start;">
       <div class="card">
-        <h3 id="ovPrimaryTitleDisplay" style="cursor:pointer;" title="Click to edit">${goals.primaryTitle}</h3>
-        <input id="ovPrimaryTitleInput" style="display:none;font-size:14px;font-weight:700;width:100%;margin-top:2px;" value="${goals.primaryTitle.replace(/"/g,'&quot;')}">
-        <p class="muted" id="ovPrimaryDisplay" style="margin-top:8px;line-height:1.6;cursor:pointer;" title="Click to edit">${goals.primary}</p>
+        <h3 id="ovPrimaryTitleDisplay" style="cursor:pointer;" title="Click to edit">${esc(goals.primaryTitle)}</h3>
+        <input id="ovPrimaryTitleInput" style="display:none;font-size:14px;font-weight:700;width:100%;margin-top:2px;" value="${esc(goals.primaryTitle)}">
+        <p class="muted" id="ovPrimaryDisplay" style="margin-top:8px;line-height:1.6;cursor:pointer;" title="Click to edit">${esc(goals.primary)}</p>
         <div id="ovPrimaryEdit" style="display:none;margin-top:8px;">
-          <textarea id="ovPrimaryInput" rows="4" style="width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;">${goals.primary}</textarea>
+          <textarea id="ovPrimaryInput" rows="4" style="width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;">${esc(goals.primary)}</textarea>
           <button class="btn" style="margin-top:8px;padding:6px 10px;font-size:12px;" id="ovPrimarySave">Save</button>
         </div>
       </div>
       <div class="card">
-        <h3 id="ovSecondaryTitleDisplay" style="cursor:pointer;" title="Click to edit">${goals.secondaryTitle}</h3>
-        <input id="ovSecondaryTitleInput" style="display:none;font-size:14px;font-weight:700;width:100%;margin-top:2px;" value="${goals.secondaryTitle.replace(/"/g,'&quot;')}">
-        <p class="muted" id="ovSecondaryDisplay" style="margin-top:8px;line-height:1.6;cursor:pointer;" title="Click to edit">${goals.secondary}</p>
+        <h3 id="ovSecondaryTitleDisplay" style="cursor:pointer;" title="Click to edit">${esc(goals.secondaryTitle)}</h3>
+        <input id="ovSecondaryTitleInput" style="display:none;font-size:14px;font-weight:700;width:100%;margin-top:2px;" value="${esc(goals.secondaryTitle)}">
+        <p class="muted" id="ovSecondaryDisplay" style="margin-top:8px;line-height:1.6;cursor:pointer;" title="Click to edit">${esc(goals.secondary)}</p>
         <div id="ovSecondaryEdit" style="display:none;margin-top:8px;">
-          <textarea id="ovSecondaryInput" rows="4" style="width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;">${goals.secondary}</textarea>
+          <textarea id="ovSecondaryInput" rows="4" style="width:100%;font-family:var(--sans);font-size:13px;border:1px solid var(--gray-200);border-radius:8px;padding:8px 10px;">${esc(goals.secondary)}</textarea>
           <button class="btn" style="margin-top:8px;padding:6px 10px;font-size:12px;" id="ovSecondarySave">Save</button>
         </div>
       </div>
@@ -2765,7 +2779,7 @@ async function renderPrograms(){
       const exCount = DAY_NAMES.reduce((n,d)=> n + (p.days[d]?.exercises?.length||0), 0);
       const isActive = activeId === p.id;
       return `<div class="card" style="${isActive?'box-shadow:0 0 0 1.5px var(--blue), var(--shadow);':''}">
-        <h3>${p.name} <span class="tag gray" style="margin-left:6px;">${p.tag}</span> ${isActive?'<span class="tag green" style="margin-left:4px;">Active</span>':''}</h3>
+        <h3>${esc(p.name)} <span class="tag gray" style="margin-left:6px;">${p.tag}</span> ${isActive?'<span class="tag green" style="margin-left:4px;">Active</span>':''}</h3>
         <p class="muted" style="margin-top:4px;">${trainDays} training day${trainDays===1?'':'s'} · ${exCount} exercise${exCount===1?'':'s'} total</p>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
           <button class="btn ghost" data-edit="${p.id}">Edit</button>
@@ -2823,7 +2837,7 @@ async function renderProgramEditor(el, programs){
     <div class="page-head">
       <div class="eyebrow">${isNew?'New Program':'Editing Program'}</div>
       <div class="page-title" style="display:flex;align-items:center;gap:10px;">
-        <input id="pbName" value="${prog.name.replace(/"/g,'&quot;')}" placeholder="Program name" style="font-size:22px;font-weight:800;border:none;background:transparent;padding:2px 0;border-bottom:2px solid var(--gray-200);">
+        <input id="pbName" value="${esc(prog.name)}" placeholder="Program name" style="font-size:22px;font-weight:800;border:none;background:transparent;padding:2px 0;border-bottom:2px solid var(--gray-200);">
       </div>
       <div class="page-sub">Pick a day, mark it Training or Rest, then pull exercises in from the library with sets, reps, and load.</div>
     </div>
@@ -2844,9 +2858,9 @@ async function renderProgramEditor(el, programs){
           <thead><tr><th>Exercise</th><th class="num">Sets</th><th class="num">Reps</th><th class="num">Working Weight</th><th></th></tr></thead>
           <tbody>${dayData.exercises.map((e,i)=>`
             <tr>
-              <td>${e.name}</td>
-              <td class="num"><input type="text" data-field="sets" data-i="${i}" value="${e.sets}" style="width:50px;text-align:right;"></td>
-              <td class="num"><input type="text" data-field="reps" data-i="${i}" value="${e.reps}" style="width:60px;text-align:right;"></td>
+              <td>${esc(e.name)}</td>
+              <td class="num"><input type="text" data-field="sets" data-i="${i}" value="${esc(e.sets)}" style="width:50px;text-align:right;"></td>
+              <td class="num"><input type="text" data-field="reps" data-i="${i}" value="${esc(e.reps)}" style="width:60px;text-align:right;"></td>
               <td class="num"><input type="text" data-field="load" data-i="${i}" value="${sharedWeights[e.name]||''}" placeholder="kg" style="width:60px;text-align:right;"></td>
               <td class="num"><button class="btn ghost" data-removeex="${i}" style="padding:5px 9px;">${ICONS.trash}</button></td>
             </tr>`).join('') || `<tr><td colspan="5" class="muted">No exercises added yet — pull one in below.</td></tr>`}
@@ -2958,12 +2972,12 @@ async function renderWeek(){
     <div class="page-head">
       <div class="eyebrow">This Week</div>
       <div class="page-title">Weekly Planner</div>
-      <div class="page-sub">${activeProg ? `Showing your active program — <b>${activeProg.name}</b>. Tap a day to edit it.` : '4 gym sessions, 3 running sessions, spread across all 7 days. Tap a day to jump to its full session.'}</div>
+      <div class="page-sub">${activeProg ? `Showing your active program — <b>${esc(activeProg.name)}</b>. Tap a day to edit it.` : '4 gym sessions, 3 running sessions, spread across all 7 days. Tap a day to jump to its full session.'}</div>
     </div>
     <div class="grid g7" id="weekGrid"></div>
     ${pulseLine()}
     <div class="card">
-      <h3>${activeProg ? activeProg.name : 'Training Principle'}</h3>
+      <h3>${activeProg ? esc(activeProg.name) : 'Training Principle'}</h3>
       <p class="muted" style="margin-top:6px;line-height:1.6;">${activeProg ? `Custom program — ${activeProg.tag}. Edit days, exercises, sets, reps, and load any time from Program Builder.` : 'Train like a hybrid athlete — muscle growth, endurance, and recovery, in balance. Compound lifts stay heavy and low-rep on strength days; accessory volume climbs on hypertrophy and athletic days; running builds from walk-run intervals to continuous long-distance work.'}</p>
     </div>
   `;
@@ -2980,7 +2994,7 @@ async function renderWeek(){
         <div class="dname">${d.slice(0,3)}</div>
         <div class="icon-chip" ${isTrain?'':'style="background:rgba(255,255,255,.12);"'}><span ${isTrain?'':'style="color:#fff;"'}>${ICONS[isTrain?'gym':'recovery']}</span></div>
         <div class="dtitle">${isTrain ? (exCount ? `${exCount} exercise${exCount===1?'':'s'}` : 'Training day') : 'Rest Day'}</div>
-        <div class="dsub">${isTrain ? (dayData.exercises.slice(0,2).map(e=>e.name).join(', ') + (exCount>2?'…':'')) : 'Recovery'}</div>
+        <div class="dsub">${isTrain ? (dayData.exercises.slice(0,2).map(e=>esc(e.name)).join(', ') + (exCount>2?'…':'')) : 'Recovery'}</div>
       </div>`;
     }).join('');
     grid.querySelectorAll('[data-jumpprog]').forEach(c=>{
@@ -3092,7 +3106,7 @@ async function renderProgramSession(el, prog){
     el.innerHTML = `
       <div class="page-head">
         <div class="eyebrow">${prog.tag}</div>
-        <div class="page-title">${prog.name}</div>
+        <div class="page-title">${esc(prog.name)}</div>
         <div class="page-sub">No exercises added to this program yet.</div>
       </div>
       <div class="card"><p class="muted">Add exercises to your training days from Program Builder to see them here.</p></div>
@@ -3106,7 +3120,7 @@ async function renderProgramSession(el, prog){
     <div class="page-head" style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;">
       <div>
         <div class="eyebrow">${trainDays.length}× Weekly — ${prog.tag}</div>
-        <div class="page-title">${prog.name}</div>
+        <div class="page-title">${esc(prog.name)}</div>
         <div class="page-sub">Log your working weight for each exercise as you train. Edits save automatically and sync to this exercise everywhere it appears.</div>
       </div>
       <button class="start-session-btn" id="startSessionBtn">${ICONS.run} Start Session</button>
@@ -3127,8 +3141,8 @@ async function renderProgramSession(el, prog){
         <table style="margin-top:10px;">
           <thead><tr><th>Exercise</th><th class="num">Sets</th><th class="num">Reps</th><th class="num">Working Weight</th></tr></thead>
           <tbody>${prog.days[d].exercises.map((e,i)=>`
-            <tr><td>${e.name}</td><td class="num">${e.sets}</td><td class="num">${e.reps}</td>
-              <td class="num"><input type="text" placeholder="kg" data-exname="${e.name}" value="${weights[e.name]||''}" style="width:72px;text-align:right;"></td></tr>`).join('')}</tbody>
+            <tr><td>${esc(e.name)}</td><td class="num">${esc(e.sets)}</td><td class="num">${esc(e.reps)}</td>
+              <td class="num"><input type="text" placeholder="kg" data-exname="${esc(e.name)}" value="${weights[e.name]||''}" style="width:72px;text-align:right;"></td></tr>`).join('')}</tbody>
         </table>
       </div>
     </div>`).join('');
@@ -3343,8 +3357,8 @@ function renderSessionExercise(){
       <div style="width:34px;"></div>
     </div>
     <div class="session-body">
-      <div class="session-exname">${ex.name}</div>
-      <div class="session-target">${ex.sets} × ${ex.reps}</div>
+      <div class="session-exname">${esc(ex.name)}</div>
+      <div class="session-target">${esc(ex.sets)} × ${esc(ex.reps)}</div>
       ${lastText?`<div class="set-last-time" style="margin-top:2px;">${lastText}</div>`:''}
       ${overload?`
       <div class="overload-suggestion ${overloadClass}">
@@ -3365,7 +3379,7 @@ function renderSessionExercise(){
             <div class="set-row-inputs">
               <input class="set-input" type="text" inputmode="decimal" data-weightinput="${i}" value="${s.weight||''}" placeholder="kg">
               <span class="set-x">×</span>
-              <input class="set-input" type="text" inputmode="numeric" data-repsinput="${i}" value="${s.reps||''}" placeholder="${ex.reps}">
+              <input class="set-input" type="text" inputmode="numeric" data-repsinput="${i}" value="${esc(s.reps||'')}" placeholder="${esc(ex.reps)}">
               <button class="plate-btn" data-platebtn="${i}" title="Plate breakdown">🏋</button>
             </div>
             <div class="plate-readout" data-plateout="${i}" style="display:none;"></div>
@@ -3942,7 +3956,7 @@ async function renderNutrition(){
     ${hasNotes ? `
     ${pulseLine()}
     <div class="card">
-      <h3>Program Guidance <span class="tag blue" style="margin-left:6px;">${activeProg.name}</span></h3>
+      <h3>Program Guidance <span class="tag blue" style="margin-left:6px;">${esc(activeProg.name)}</span></h3>
       <div class="check-list" style="margin-top:10px;">
         ${activeProg.meta.keepInMind.map(t=>`<div class="check-item" style="cursor:default;"><div class="check-box done">${ICONS.check}</div><span class="label">${t}</span></div>`).join('')}
       </div>
@@ -3979,7 +3993,7 @@ async function renderRecovery(){
     const m = activeProg.meta;
     el.innerHTML = `
       <div class="page-head">
-        <div class="eyebrow">Linked To ${activeProg.name}</div>
+        <div class="eyebrow">Linked To ${esc(activeProg.name)}</div>
         <div class="page-title">Recovery Dashboard</div>
         <div class="page-sub">Rest intervals, warm-up protocol, and coaching rules — pulled straight from your active program.</div>
       </div>
@@ -4064,7 +4078,7 @@ async function renderTimeline(){
         </div>
       </div>
       <div class="card" style="margin-top:14px;">
-        <h3>Currently Following ${activeProg ? activeProg.name : 'a custom program'}</h3>
+        <h3>Currently Following ${activeProg ? esc(activeProg.name) : 'a custom program'}</h3>
         <p class="muted" style="margin-top:6px;line-height:1.6;">This program doesn't use a month-by-month milestone arc. Check the <b>Recovery</b> tab for its real phase length and pacing guidance, or switch back to Hybrid Athlete from Program Builder to see its 5-month timeline.</p>
         <button class="btn secondary" style="margin-top:12px;" id="tlGoBuilder">Open Program Builder</button>
       </div>
@@ -4575,7 +4589,7 @@ async function renderCheat(){
     if(!dayData || dayData.type==='rest'){
       sessionHTML = `<div class="row"><span>Focus</span><span class="v">Full recovery</span></div>`;
     } else {
-      sessionHTML = dayData.exercises.map(e=>`<div class="row"><span>${e.name}</span><span class="v">${e.sets}×${e.reps}${cheatWeights[e.name]?' @ '+cheatWeights[e.name]+'kg':''}</span></div>`).join('') || `<div class="row"><span>Focus</span><span class="v">Training day — no exercises added yet</span></div>`;
+      sessionHTML = dayData.exercises.map(e=>`<div class="row"><span>${esc(e.name)}</span><span class="v">${esc(e.sets)}×${esc(e.reps)}${cheatWeights[e.name]?' @ '+cheatWeights[e.name]+'kg':''}</span></div>`).join('') || `<div class="row"><span>Focus</span><span class="v">Training day — no exercises added yet</span></div>`;
     }
   } else {
     const plan = WEEK_PLAN.find(d=>d.day===todayName) || {title:'Full Rest Day', type:'rest'};
@@ -4608,7 +4622,7 @@ async function renderCheat(){
     </div>
     <div class="sheet">
       <h2>${todayName}</h2>
-      <div class="sub">${sheetTitle}</div>
+      <div class="sub">${esc(sheetTitle)}</div>
       <div class="sheet-grid">
         <div class="sheet-block">
           <h4>Session</h4>
