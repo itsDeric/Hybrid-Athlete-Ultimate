@@ -223,6 +223,8 @@ td.num,th.num{font-family:var(--mono);}
 .tag.gray{background:var(--gray-100);color:var(--gray-600);}
 .tag.green{background:rgba(31,177,90,.12);color:var(--green);}
 .tag.rest{background:var(--gray-800);color:#fff;}
+.tag.amber{background:rgba(201,138,18,.12);color:var(--amber);}
+.tag.red{background:rgba(224,53,43,.12);color:var(--red);}
 
 .exercise-chip{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:99px;border:1px solid var(--gray-200);background:#fff;cursor:pointer;color:var(--gray-600);}
 .exercise-chip.active{background:var(--black);color:#fff;border-color:var(--black);}
@@ -1574,6 +1576,56 @@ async function recordRecoveryEntry(patch){
   await setJSON('recovery-log', log);
 }
 
+/* ---------- READINESS SCORE — the one derived metric this dashboard is allowed to show ----------
+   Deliberately does NOT ship a "Hybrid Score" composite (strength + running + recovery + consistency
+   all rolled into one number) alongside this. That would need real training-load data (Phase 5 on the
+   roadmap, not built yet) to mean anything — inventing a headline number backed by only partial data
+   and calling it something that grand is exactly the kind of fabricated mapping A2 (Training Goals)
+   already drew a hard line against. Readiness, by contrast, is honestly and fully backed by what
+   Recovery now actually logs, so it ships alone.
+
+   Formula (equal-weighted average of whichever sub-scores the athlete actually logged today — not
+   all three are required):
+     - Sleep: 100 within the program's own 7.5-9h guidance band; scales down 20pts/hour under 7.5h,
+       10pts/hour over 9h (oversleep is a much weaker fatigue signal than under-sleep, not symmetric).
+     - Soreness (1 fresh - 5 very sore): linearly inverted to a 0-100 score.
+     - Energy (1 drained - 5 great): linearly mapped to a 0-100 score.
+   Returns null (not a fake number) if nothing was logged today at all — the UI shows a prompt to log
+   a check-in instead of a misleading score. */
+function computeReadiness(entry){
+  if(!entry) return null;
+  const subScores = [];
+  if(entry.sleepHours!=null && !isNaN(entry.sleepHours)){
+    let s;
+    if(entry.sleepHours >= 7.5 && entry.sleepHours <= 9) s = 100;
+    else if(entry.sleepHours < 7.5) s = Math.max(0, 100 - (7.5-entry.sleepHours)*20);
+    else s = Math.max(0, 100 - (entry.sleepHours-9)*10);
+    subScores.push(s);
+  }
+  if(entry.soreness!=null && !isNaN(entry.soreness)) subScores.push((5-entry.soreness)/4*100);
+  if(entry.energy!=null && !isNaN(entry.energy)) subScores.push((entry.energy-1)/4*100);
+  if(!subScores.length) return null;
+  return Math.round(subScores.reduce((a,b)=>a+b,0) / subScores.length);
+}
+function fatigueLabelFromReadiness(score){
+  if(score==null) return '—';
+  if(score >= 75) return 'Low';
+  if(score >= 45) return 'Moderate';
+  return 'High';
+}
+function readinessTagClass(score){
+  if(score==null) return 'gray';
+  if(score >= 75) return 'green';
+  if(score >= 45) return 'amber';
+  return 'red';
+}
+function todaysFocusText(score){
+  if(score==null) return 'Log today\'s check-in above to get a focus recommendation.';
+  if(score >= 75) return 'Green light — train as planned today.';
+  if(score >= 45) return 'Moderate fatigue — stick to the plan, but don\'t chase extra volume today.';
+  return 'High fatigue — consider trimming volume, keeping effort technical, or swapping in an easier session.';
+}
+
 const PROFILE_DEFAULTS = {
   weight: 72, name:'', age:'', gender:'', height:'',
   experience:'', daysPerWeek:'', sessionMinutes:'', equipment:'',
@@ -2573,6 +2625,11 @@ async function renderOverview(){
     }
   }
 
+  // Readiness — computed fresh every render from today's Recovery check-in (see computeReadiness()).
+  const todayRecoveryEntry = await getTodayRecoveryEntry();
+  const readinessScore = computeReadiness(todayRecoveryEntry);
+  const readinessTag = readinessTagClass(readinessScore);
+
   el.innerHTML = `
     <div class="page-head">
       <div class="eyebrow">Your Training Home</div>
@@ -2581,6 +2638,28 @@ async function renderOverview(){
     </div>
 
     ${backupReminderHTML()}
+
+    <div class="card" style="margin-bottom:14px;" id="ovReadinessCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3>Readiness</h3>
+        <span class="tag ${readinessTag}">${fatigueLabelFromReadiness(readinessScore)} fatigue</span>
+      </div>
+      ${readinessScore!=null ? `
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px;">
+          <div class="stat-value" style="font-size:34px;">${readinessScore}<small>%</small></div>
+        </div>
+        <div class="pbar"><div style="width:${readinessScore}%;background:${readinessTag==='green'?'var(--green)':readinessTag==='amber'?'var(--amber)':'var(--red)'};"></div></div>
+        <div class="grid g3" style="margin-top:14px;">
+          <div><div class="stat-label">Sleep</div><div class="stat-value" style="font-size:14px;">${todayRecoveryEntry.sleepHours!=null?todayRecoveryEntry.sleepHours+'h':'—'}</div></div>
+          <div><div class="stat-label">Soreness</div><div class="stat-value" style="font-size:14px;">${todayRecoveryEntry.soreness!=null?todayRecoveryEntry.soreness+'/5':'—'}</div></div>
+          <div><div class="stat-label">Energy</div><div class="stat-value" style="font-size:14px;">${todayRecoveryEntry.energy!=null?todayRecoveryEntry.energy+'/5':'—'}</div></div>
+        </div>
+        <p class="muted" style="margin-top:12px;">${todaysFocusText(readinessScore)}</p>
+      ` : `
+        <p class="muted" style="margin-top:8px;">Log today's sleep, soreness, and energy in Recovery to see your Readiness score.</p>
+        <button class="btn" id="ovGoRecoveryBtn" style="margin-top:10px;">Log Today's Check-In</button>
+      `}
+    </div>
 
     <div class="card" style="margin-bottom:14px;${!todayIsRest?'cursor:pointer;':''}" id="ovTodayCard">
       <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -2640,6 +2719,9 @@ async function renderOverview(){
   }
 
   wireBackupReminderCard();
+
+  const goRecoveryBtn = document.getElementById('ovGoRecoveryBtn');
+  if(goRecoveryBtn) goRecoveryBtn.addEventListener('click', ()=> showView('recovery'));
 
   // Start weight
   const disp = document.getElementById('ovWeightDisplay');
