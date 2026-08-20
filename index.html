@@ -1545,6 +1545,53 @@ async function recordWeight(value, date){
   await setJSON('weight-log', log);
 }
 
+/* ---------- WEIGHT UNIT PREFERENCE (kg/lb) ----------
+   Every weight value in this app — weight-log, exercise-weights, strength goals — is stored in kg,
+   everywhere, always, with zero exceptions. This block converts ONLY at the display/input boundary.
+   That single rule is what makes this safe: a stored number's unit is never ambiguous, so there's
+   no risk of double-converting or silently mixing kg and lb entries in the same history.
+
+   Default is inferred from locale (matches the researched Hevy/Strava pattern: default from context,
+   never force a question) rather than asked during onboarding — PROFILE_DEFAULTS.weightUnit starts
+   empty, and stays empty until the athlete explicitly overrides it via the two-tap toggle on Profile.
+   Scope note: this pass covers the two highest-traffic touchpoints (Overview weight, Training Goals)
+   deliberately, not session-mode set-weight input or the shared exercise-weights table — those touch
+   live workout logging and deserve their own focused pass rather than being bundled in here. */
+const KG_PER_LB = 0.45359237;
+function kgToLb(kg){ return kg / KG_PER_LB; }
+function lbToKg(lb){ return lb * KG_PER_LB; }
+function inferWeightUnitFromLocale(){
+  try{
+    const locale = (navigator.language || 'en-GB').toLowerCase();
+    // The only countries where body/gym weight is colloquially pounds despite metric being official
+    // (or, for the US, the only non-metric country outright) — everywhere else defaults to kg.
+    return (locale.startsWith('en-us') || locale.startsWith('en-lr') || locale.startsWith('en-mm')) ? 'lb' : 'kg';
+  }catch(e){ return 'kg'; }
+}
+// Cached per-render rather than threaded through every call as an async param — formatGoalValue()
+// alone can run dozens of times in a single render pass and must stay synchronous. Call
+// refreshActiveWeightUnit(profile) once at the top of any render function that displays or accepts
+// weight input, before anything that reads ACTIVE_WEIGHT_UNIT.
+let ACTIVE_WEIGHT_UNIT = 'kg';
+function refreshActiveWeightUnit(profile){
+  ACTIVE_WEIGHT_UNIT = (profile && profile.weightUnit) ? profile.weightUnit : inferWeightUnitFromLocale();
+  return ACTIVE_WEIGHT_UNIT;
+}
+function formatWeightKg(kgValue, unit, decimals){
+  if(kgValue==null || kgValue==='' || isNaN(kgValue)) return '';
+  unit = unit || ACTIVE_WEIGHT_UNIT;
+  const val = unit==='lb' ? kgToLb(kgValue) : kgValue;
+  const d = decimals!=null ? decimals : 1;
+  const mult = Math.pow(10,d);
+  return (Math.round(val*mult)/mult).toString();
+}
+function parseWeightToKg(displayValue, unit){
+  const n = parseFloat(displayValue);
+  if(isNaN(n)) return null;
+  unit = unit || ACTIVE_WEIGHT_UNIT;
+  return unit==='lb' ? lbToKg(n) : n;
+}
+
 // One-time migration: an existing user may have profile.weight but have never logged anything in
 // weight-log (this repair predates weight-log being the authority). Seed weight-log with that value
 // so it isn't lost — but only if weight-log is genuinely empty, and only ever once, so it can never
@@ -1635,6 +1682,7 @@ const PROFILE_DEFAULTS = {
   weight: 72, name:'', age:'', gender:'', height:'',
   experience:'', daysPerWeek:'', sessionMinutes:'', equipment:'',
   strengthLevel:'', enduranceLevel:'', primaryGoal:'', secondaryGoal:'',
+  weightUnit:'', // '' = not yet explicitly chosen; falls back to inferWeightUnitFromLocale()
 };
 async function getAthleteProfile(){
   const saved = await getJSON('profile', {});
@@ -1655,6 +1703,7 @@ async function saveAthleteProfile(patch){
 async function renderProfile(){
   const el = document.getElementById('view-profile');
   const p = await getAthleteProfile();
+  refreshActiveWeightUnit(p);
   const nz = (v, unit)=> (v!==''&&v!==null&&v!==undefined) ? `${v}${unit||''}` : 'Not set';
 
   el.innerHTML = `
@@ -1668,7 +1717,7 @@ async function renderProfile(){
       <h3>Summary</h3>
       <div class="grid g4" style="margin-top:12px;">
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Name</div><div class="stat-value" style="font-size:16px;">${esc(p.name)||'Not set'}</div></div>
-        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Weight</div><div class="stat-value">${nz(p.weight,' kg')}</div></div>
+        <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Weight</div><div class="stat-value">${p.weight!=null&&p.weight!==''?`${formatWeightKg(p.weight, ACTIVE_WEIGHT_UNIT)} ${ACTIVE_WEIGHT_UNIT}`:'Not set'}</div></div>
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Height</div><div class="stat-value">${nz(p.height,' cm')}</div></div>
         <div class="stat-card" style="background:var(--gray-50);border-radius:12px;padding:14px;"><div class="stat-label">Experience</div><div class="stat-value" style="font-size:16px;">${p.experience||'Not set'}</div></div>
       </div>
@@ -1688,7 +1737,14 @@ async function renderProfile(){
           </select>
         </div>
         <div class="field"><label>Height (cm)</label><input id="pfHeight" type="number" placeholder="e.g. 178" value="${p.height}"></div>
-        <div class="field"><label>Current Weight (kg)</label><input id="pfWeight" type="number" step="0.1" placeholder="e.g. 75" value="${p.weight}"></div>
+        <div class="field"><label>Current Weight (${ACTIVE_WEIGHT_UNIT})</label><input id="pfWeight" type="number" step="0.1" placeholder="e.g. 75" value="${formatWeightKg(p.weight, ACTIVE_WEIGHT_UNIT)}"></div>
+        <div class="field">
+          <label>Preferred Units</label>
+          <div class="scale-row" id="pfUnitToggle">
+            <button type="button" class="scale-btn ${ACTIVE_WEIGHT_UNIT==='kg'?'active':''}" data-unit="kg" style="font-size:14px;">kg</button>
+            <button type="button" class="scale-btn ${ACTIVE_WEIGHT_UNIT==='lb'?'active':''}" data-unit="lb" style="font-size:14px;">lb</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1760,7 +1816,7 @@ async function renderProfile(){
       age: document.getElementById('pfAge').value ? parseInt(document.getElementById('pfAge').value) : '',
       gender: document.getElementById('pfGender').value,
       height: document.getElementById('pfHeight').value ? parseFloat(document.getElementById('pfHeight').value) : '',
-      weight: document.getElementById('pfWeight').value ? parseFloat(document.getElementById('pfWeight').value) : PROFILE_DEFAULTS.weight,
+      weight: document.getElementById('pfWeight').value ? parseWeightToKg(document.getElementById('pfWeight').value, ACTIVE_WEIGHT_UNIT) : PROFILE_DEFAULTS.weight,
       experience: document.getElementById('pfExperience').value,
       daysPerWeek: document.getElementById('pfDays').value ? parseInt(document.getElementById('pfDays').value) : '',
       sessionMinutes: document.getElementById('pfMinutes').value ? parseInt(document.getElementById('pfMinutes').value) : '',
@@ -1776,6 +1832,19 @@ async function renderProfile(){
     renderCheat();
     const msg = document.getElementById('pfSavedMsg');
     if(msg){ msg.style.opacity = '1'; setTimeout(()=>{ msg.style.opacity = '0'; }, 1800); }
+  });
+
+  // Unit preference is a global display setting, not a form field batched with the rest of the
+  // profile — it applies the moment it's tapped (the "always editable, two taps" pattern from the
+  // Hevy/Strava onboarding research), not gated behind the separate Save Profile button above.
+  document.querySelectorAll('#pfUnitToggle .scale-btn').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      await saveAthleteProfile({ weightUnit: btn.dataset.unit });
+      renderProfile();
+      renderOverview();
+      renderTrainingGoals();
+      renderNutrition();
+    });
   });
 }
 
@@ -1963,11 +2032,13 @@ function computeGoalProgress(goal){
 
 function formatGoalValue(goal, value){
   if(goal.unit === 'min:sec') return formatSecondsToTime(value);
+  if(goal.unit === 'kg') return `${formatWeightKg(value, ACTIVE_WEIGHT_UNIT)} ${ACTIVE_WEIGHT_UNIT}`;
   return `${value}${goal.unit ? ' '+goal.unit : ''}`;
 }
 
 async function renderTrainingGoals(){
   const el = document.getElementById('view-goals');
+  refreshActiveWeightUnit(await getJSON('profile', {}));
   const rawGoals = await getJSON('training-goals', []);
   const profile = await getAthleteProfile();
 
@@ -2132,9 +2203,12 @@ async function renderTrainingGoals(){
           <div class="field"><input id="gfTargetSec" type="number" min="0" max="59" placeholder="Sec" value="${tgt.s}"></div>
         </div>`;
     } else {
+      const isKg = metric.unit === 'kg';
+      const displayUnit = isKg ? ACTIVE_WEIGHT_UNIT : metric.unit;
+      const displayTarget = isKg ? formatWeightKg(target, ACTIVE_WEIGHT_UNIT) : (target!=null?target:'');
       box.innerHTML = `
-        <div class="field"><label>Target${metric.unit?` (${esc(metric.unit)})`:''}</label>
-          <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${target!=null?target:''}">${metric.unit?`<span>${esc(metric.unit)}</span>`:''}</div>
+        <div class="field"><label>Target${displayUnit?` (${esc(displayUnit)})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfTargetVal" type="number" step="any" placeholder="e.g. 120" value="${displayTarget}">${displayUnit?`<span>${esc(displayUnit)}</span>`:''}</div>
         </div>
         ${metric.customizable ? `
         <div class="goal-form-grid" style="margin-top:12px;">
@@ -2186,9 +2260,12 @@ async function renderTrainingGoals(){
           <div class="field"><input id="gfCurrentSec" type="number" min="0" max="59" placeholder="Sec" value="${cur.s}"></div>
         </div>`;
     } else {
+      const isKg = metric.unit === 'kg';
+      const displayUnit = isKg ? ACTIVE_WEIGHT_UNIT : metric.unit;
+      const displayCurrent = isKg ? formatWeightKg(current, ACTIVE_WEIGHT_UNIT) : (current!=null?current:'');
       box.innerHTML = `
-        <div class="field"><label>Current${metric.unit?` (${esc(metric.unit)})`:''}</label>
-          <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${current!=null?current:''}">${metric.unit?`<span>${esc(metric.unit)}</span>`:''}</div>
+        <div class="field"><label>Current${displayUnit?` (${esc(displayUnit)})`:''}</label>
+          <div class="goal-value-suffix"><input id="gfCurrentVal" type="number" step="any" placeholder="e.g. 100" value="${displayCurrent}">${displayUnit?`<span>${esc(displayUnit)}</span>`:''}</div>
         </div>`;
     }
   }
@@ -2309,8 +2386,9 @@ async function renderTrainingGoals(){
         if(isNaN(cm)||isNaN(cs)) return { ok:false };
         return { ok:true, value: cm*60+cs };
       }
-      const v = parseFloat(document.getElementById('gfCurrentVal').value);
-      if(isNaN(v)) return { ok:false };
+      const rawVal = document.getElementById('gfCurrentVal').value;
+      const v = metric.unit === 'kg' ? parseWeightToKg(rawVal, ACTIVE_WEIGHT_UNIT) : parseFloat(rawVal);
+      if(v == null || isNaN(v)) return { ok:false };
       return { ok:true, value: v };
     }
     if(mode === 'auto'){
@@ -2333,8 +2411,12 @@ async function renderTrainingGoals(){
       if(isNaN(tm)||isNaN(ts)) return null;
       return { targetValue: tm*60+ts, unit:'min:sec' };
     }
-    const targetValue = parseFloat(document.getElementById('gfTargetVal').value);
-    if(isNaN(targetValue)) return null;
+    const rawTarget = document.getElementById('gfTargetVal').value;
+    const targetValue = metric.unit === 'kg' ? parseWeightToKg(rawTarget, ACTIVE_WEIGHT_UNIT) : parseFloat(rawTarget);
+    if(targetValue == null || isNaN(targetValue)) return null;
+    // Stored unit always stays the metric's canonical unit ('kg'), never the display unit — the
+    // value itself is what got converted above; formatGoalValue() re-converts for display every
+    // time, so the stored record must stay in the one unit everything else assumes it's in.
     let unit = metric.unit, direction = metric.direction;
     if(metric.customizable){
       unit = document.getElementById('gfCustomUnit').value.trim();
@@ -2546,6 +2628,7 @@ function wireBackupReminderCard(){
 async function renderOverview(){
   const el = document.getElementById('view-overview');
   const profile = { weight: await getCurrentWeight() }; // A1: weight-log is authoritative, not a raw profile read
+  refreshActiveWeightUnit(await getJSON('profile', {}));
 
   const activeId = await getJSON('active-program', null);
   const customPrograms = await getJSON('custom-programs', []);
@@ -2684,9 +2767,9 @@ async function renderOverview(){
     <div class="grid g3">
       <div class="card stat-card">
         <div class="stat-label">Current Weight</div>
-        <div class="stat-value" id="ovWeightDisplay" style="cursor:pointer;" title="Click to edit">${profile.weight} <small>kg</small></div>
+        <div class="stat-value" id="ovWeightDisplay" style="cursor:pointer;" title="Click to edit">${formatWeightKg(profile.weight, ACTIVE_WEIGHT_UNIT)} <small>${ACTIVE_WEIGHT_UNIT}</small></div>
         <div id="ovWeightEdit" style="display:none;margin-top:8px;gap:6px;align-items:center;">
-          <input id="ovWeightInput" type="number" step="0.1" value="${profile.weight}" style="width:80px;">
+          <input id="ovWeightInput" type="number" step="0.1" value="${formatWeightKg(profile.weight, ACTIVE_WEIGHT_UNIT)}" style="width:80px;">
           <button class="btn" style="padding:6px 10px;font-size:12px;" id="ovWeightSave">Save</button>
         </div>
       </div>
@@ -2753,7 +2836,7 @@ async function renderOverview(){
     document.getElementById('ovWeightInput').focus();
   });
   document.getElementById('ovWeightSave').addEventListener('click', async ()=>{
-    const w = parseFloat(document.getElementById('ovWeightInput').value) || profile.weight;
+    const w = parseWeightToKg(document.getElementById('ovWeightInput').value, ACTIVE_WEIGHT_UNIT) ?? profile.weight;
     await recordWeight(w); // A1: goes straight to weight-log, the single authority — never touches 'profile'
     renderOverview();
     renderNutrition();
@@ -4055,6 +4138,7 @@ async function renderRunningGoalPlan(el, goal){
 async function renderNutrition(){
   const el = document.getElementById('view-nutrition');
   const profile = { weight: await getCurrentWeight() }; // A1: weight-log is authoritative
+  refreshActiveWeightUnit(await getJSON('profile', {}));
 
   const activeId = await getJSON('active-program', null);
   let activeProg = null;
@@ -4071,7 +4155,7 @@ async function renderNutrition(){
       <div class="page-sub">Targets scale to your current bodyweight. Update it as it changes.</div>
     </div>
     <div class="form-row">
-      <div class="field"><label>Current Weight (kg)</label><input id="nutWeight" type="number" step="0.1" value="${profile.weight}" style="width:110px;"></div>
+      <div class="field"><label>Current Weight (${ACTIVE_WEIGHT_UNIT})</label><input id="nutWeight" type="number" step="0.1" value="${formatWeightKg(profile.weight, ACTIVE_WEIGHT_UNIT)}" style="width:110px;"></div>
       <button class="btn" id="nutUpdate">Update Targets</button>
     </div>
     <div class="grid g3" id="macroCards"></div>
@@ -4100,7 +4184,7 @@ async function renderNutrition(){
   }
   renderMacros(profile.weight);
   document.getElementById('nutUpdate').addEventListener('click', async ()=>{
-    const w = parseFloat(document.getElementById('nutWeight').value)||60;
+    const w = parseWeightToKg(document.getElementById('nutWeight').value, ACTIVE_WEIGHT_UNIT) ?? 60;
     await recordWeight(w); // A1: goes straight to weight-log — never touches 'profile'
     renderMacros(w);
     renderCheat();
