@@ -2580,9 +2580,68 @@ async function renderTrainingGoals(){
   });
 }
 
-/* ---------- Backup reminder banner — the universal fallback (works on iOS Safari too, where the
-   auto-backup-folder feature above isn't available). Shown on Overview since it's the first/most-
-   viewed screen. Deliberately non-blocking and dismissible — this is a safety net, not a nag wall. */
+/* ---------- Comeback flow — distinguishing a planned rest day from an unplanned skip ----------
+   Built directly from real evidence, not a hypothesis (see PM teaching log, Entries 2-3): a missed
+   day has no easy re-entry point, and that gap — not lack of motivation — is what turns a short
+   break into a long one. Physically, a planned rest day and an unplanned skip produce the identical
+   result (no session logged) — but they're psychological opposites, and until now the app couldn't
+   tell them apart at all. This does exactly that, and nothing more: it detects a real gap and offers
+   one obvious, low-effort way back in. It deliberately does NOT show a "you missed N days" count —
+   surfacing that number is the closest thing to reinforcing the exact loss-aversion spiral this
+   feature exists to interrupt. The return moment should feel like "here's today," not a scoreboard. */
+const COMEBACK_LOOKBACK_DAYS = 14; // don't reach back further than this — a gap from months ago isn't "today's" comeback moment
+const COMEBACK_MIN_GAP = 2; // one missed day is just life; two+ consecutive missed *scheduled* days is a real gap worth surfacing
+// Single definition of "was this day scheduled as rest," used by both this detector and Overview's
+// existing 'today' card logic below — written to mirror that logic exactly (not refactored to share
+// the same function, to avoid touching an already-working, already-tested code path for this task;
+// if the rest-day rule ever changes, both spots need updating together).
+function isScheduledRestDay(dayName, activeProg){
+  if(activeProg){
+    const dayData = activeProg.days[dayName] || {type:'rest', exercises:[]};
+    return dayData.type==='rest' || !dayData.exercises.length;
+  }
+  const plan = WEEK_PLAN.find(d=>d.day===dayName);
+  if(plan && (plan.type==='gym' || plan.type==='both') && GYM[dayName]) return false;
+  if(plan && plan.type==='run') return false;
+  return true;
+}
+async function detectComebackGap(activeProg){
+  const history = await getJSON('session-history', []);
+  const loggedDates = new Set(history.map(h=>h.date));
+
+  // If today itself is already logged, the "get back in today" moment has already happened — the
+  // card exists to prompt the return action, not to keep congratulating someone who already took
+  // it. Suppress immediately rather than let the backward walk (which never looks at today at all)
+  // report a stale gap from before today's session was completed.
+  if(loggedDates.has(todayKey())) return 0;
+
+  // Walk backward from yesterday — today doesn't count as "missed" until the day is actually over,
+  // so a comeback prompt never shows while today's session could still perfectly well happen later.
+  let gapCount = 0;
+  for(let i=1; i<=COMEBACK_LOOKBACK_DAYS; i++){
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateKey = d.toISOString().slice(0,10);
+    const dayName = DAY_NAMES[(d.getDay()+6)%7]; // getDay(): Sun=0..Sat=6 — DAY_NAMES starts Monday
+    if(loggedDates.has(dateKey)) break; // hit a logged session — the gap, if any, ends here
+    if(isScheduledRestDay(dayName, activeProg)) continue; // planned rest — doesn't count, doesn't break the walk either
+    gapCount++;
+  }
+  return gapCount;
+}
+function comebackCardHTML(gapCount, todayIsRest, hasJumpAction){
+  if(gapCount < COMEBACK_MIN_GAP) return '';
+  return `
+  <div class="card" id="comebackCard" style="margin-bottom:14px;border:1px solid rgba(10,108,255,.25);background:rgba(10,108,255,.05);">
+    <h3>Welcome back</h3>
+    <p class="muted" style="margin-top:6px;line-height:1.6;">${todayIsRest
+      ? "No need to catch up on anything — today's a scheduled rest day, so there's nothing to jump into right now."
+      : "No need to catch up on anything or figure out where you left off — today's session is right where you'd expect it."}</p>
+    ${(!todayIsRest && hasJumpAction) ? `<button class="btn" id="comebackStartBtn" style="margin-top:10px;">Start Today's Session</button>` : ''}
+  </div>`;
+}
+
+
 const BACKUP_REMINDER_DAYS = 7;
 function hasAnyLoggedData(){
   return Object.keys(localStorage).some(k=> k.startsWith(LS_PREFIX));
@@ -2633,6 +2692,7 @@ async function renderOverview(){
   const activeId = await getJSON('active-program', null);
   const customPrograms = await getJSON('custom-programs', []);
   const activeProg = activeId ? (customPrograms.find(p=>p.id===activeId) || null) : null;
+  const comebackGap = await detectComebackGap(activeProg);
 
   const goalsKey = 'overview-goals:' + (activeProg ? activeProg.id : 'builtin');
   let defaultGoals;
@@ -2725,6 +2785,8 @@ async function renderOverview(){
       <div class="page-sub">${headSub}</div>
     </div>
 
+    ${comebackCardHTML(comebackGap, todayIsRest, !!todayJumpHandler)}
+
     ${backupReminderHTML()}
 
     <div class="card" style="margin-bottom:14px;" id="ovReadinessCard">
@@ -2812,6 +2874,12 @@ async function renderOverview(){
   if(todayJumpHandler){
     document.getElementById('ovTodayCard').addEventListener('click', todayJumpHandler);
   }
+
+  // Comeback flow — the button, when shown, jumps to the exact same place the 'What's Today' card
+  // does. Deliberately reuses todayJumpHandler rather than a second navigation path, so there's
+  // only ever one definition of "where today's session actually is."
+  const comebackBtn = document.getElementById('comebackStartBtn');
+  if(comebackBtn && todayJumpHandler) comebackBtn.addEventListener('click', todayJumpHandler);
 
   wireBackupReminderCard();
 
